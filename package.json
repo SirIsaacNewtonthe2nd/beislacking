@@ -1,0 +1,11 @@
+{
+  "name": "gridrun",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser racing game with block-built tracks",
+  "scripts": {
+    "sim": "node tools/sim.mjs",
+    "serve": "npx http-server -c-1 -p 8080 ."
+  }
+}
