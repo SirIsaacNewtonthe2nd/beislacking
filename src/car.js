@@ -16,7 +16,7 @@ export const MAX_SPEED = 1000 / 3.6;
 
 // ---------------------------------------------------------------- chassis
 export const MASS = 700;                       // kg, with driver
-const INERTIA = [900, 950, 280];               // kg m^2 about local x (pitch), y (yaw), z (roll)
+const INERTIA = [900, 800, 280];               // kg m^2 about local x (pitch), y (yaw), z (roll)
 const INV_I = INERTIA.map((x) => 1 / x);
 export const WHEEL_RADIUS = 0.34;
 export const REST = 0.3;                       // mount to wheel centre, spring unloaded
@@ -24,18 +24,17 @@ const MOUNT_Y = 0.314;                         // centre of mass ~30 cm above th
 // Wide track and low centre of mass: the car can only tip once its grip (in g)
 // passes track / (2 * height), here ~3.3 g, above what the tyres can give.
 export const WHEELS = [
-  { pos: [1.0, MOUNT_Y, 1.45], front: true, left: true },
-  { pos: [-1.0, MOUNT_Y, 1.45], front: true, left: false },
-  { pos: [0.98, MOUNT_Y, -1.3], front: false, left: true },
-  { pos: [-0.98, MOUNT_Y, -1.3], front: false, left: false },
+  { pos: [1.0, MOUNT_Y, 1.38], front: true, left: true },
+  { pos: [-1.0, MOUNT_Y, 1.38], front: true, left: false },
+  { pos: [0.98, MOUNT_Y, -1.37], front: false, left: true },
+  { pos: [-0.98, MOUNT_Y, -1.37], front: false, left: false },
 ];
 const WHEELBASE = 2.75;
 const RAY = REST + WHEEL_RADIUS;
 const TRAVEL = 0.13;                           // bump stop engages here
-const SPRING = [62000, 70000];                 // N/m front, rear: ~3 Hz, ~2.6 cm of droop
+const SPRING = [58000, 72000];                 // N/m front, rear: ~3 Hz, ~2.6 cm of droop
 const DAMP_BUMP = [3100, 3400];                // N s/m
 const DAMP_REBOUND = [4400, 4800];
-const ARB = [30000, 20000];                    // anti-roll bar, N/m of compression difference
 const BUMP_K = 2.0e6;
 const BUMP_C = 38000;                           // close to critical for the bump stop, so it doesn't chatter
 const WHEEL_INERTIA = [1.0, 1.25];             // kg m^2 incl. brake disc / driveline share
@@ -72,8 +71,10 @@ const BRAKE_BIAS = 0.67;                       // front share
 const RHO = 1.225;
 const CDA = [2.4, 3.0, 0.85];                  // body drag area along local x, y, z (m^2)
 const DRAG_CENTRE = [0, 0.05, -0.35];
-const WINGS = [{ p: [0, -0.25, 2.25], cla: 1.9 }, { p: [0, 0.6, -1.95], cla: 2.6 }];
-export const DOWNFORCE_PER_MASS = (0.5 * RHO * 4.5) / MASS; // m/s^2 per (m/s)^2, used by the bot
+const WINGS = [{ p: [0, -0.25, 2.25] }, { p: [0, 0.6, -1.95] }];
+export const DOWNFORCE_PER_MASS = (0.5 * RHO * 6.0) / MASS; // m/s^2 per (m/s)^2, used by the bot
+// the wings stall (and the floor stops sealing) beyond ~3x the car's weight
+export const DOWNFORCE_CAP = 3 * GRAVITY;                  // m/s^2
 
 // ---------------------------------------------------------------- tyres
 // Combined slip: slip ratio and slip angle are normalised by their peak values
@@ -92,6 +93,12 @@ const MF_B = (() => {
 })();
 const mf = (s) => Math.sin(MF_C * Math.atan(MF_B * s - MF_E * (MF_B * s - Math.atan(MF_B * s))));
 const FZ_NOM = 2500;
+// Handling balance, in one place so it can be tuned (tools/handling.mjs searches it)
+export const SETUP = {
+  axleGrip: [1.08, 1.0],      // front tyres are the grippier compound, so the nose bites
+  arb: [12000, 22000],        // anti-roll bars, N/m: soft front for front grip
+  wingCla: [2.45, 3.55],      // front / rear wing downforce, ClA m^2: rear-biased for high-speed stability
+};
 const V_MIN = 3; // m/s: slip denominators never go below this, which keeps standstill stable
 
 // mu: peak friction, kp / ap: slip ratio / slip angle at peak, rr: rolling resistance coefficient
@@ -113,7 +120,7 @@ const BOOST_TIME = 1.4;
 const BOOST_FORCE = { [SURF.turbo]: 7000, [SURF.turbo2]: 12000 }; // N, a thrust on top of the engine
 export const EFFECT_TIME = 4; // engine-off / no-steering last this long unless reset sooner
 const SURF_NAME = Object.fromEntries(Object.entries(SURF).map(([k, v]) => [v, k]));
-const LOCK = 0.42; // max road-wheel angle, rad
+const LOCK = 0.52; // max road-wheel angle, rad
 const MU_REF = 2.8; // road grip, used by the steering assist and stability control
 
 export function engineTorque(rpm) {
@@ -247,8 +254,9 @@ export class Car {
   steerLimit(vx) {
     const v = Math.abs(vx);
     if (v < 1) return LOCK;
-    const aLat = 0.95 * MU_REF * GRAVITY * Math.max(0.6, this.load);
-    return Math.min(LOCK, Math.atan((WHEELBASE * aLat) / (v * v)) + 0.035);
+    const aLat = 1.1 * MU_REF * GRAVITY * Math.max(0.6, this.load);
+    // extra angle for the tyres' slip, generous at low speed, tighter at high speed
+    return Math.min(LOCK, Math.atan((WHEELBASE * aLat) / (v * v)) + 0.035 + 0.05 / (1 + v / 25));
   }
 
   step(input, dt) {
@@ -267,11 +275,11 @@ export class Car {
     // ---- driver inputs
     const want = this.noSteer > 0 ? 0 : clamp(input.steer || 0, -1, 1);
     if (input.analog) this.steer = want;
-    else this.steer = approach(this.steer, want, (Math.abs(want) < Math.abs(this.steer) || want * this.steer < 0 ? 11 : 8) * dt);
+    else this.steer = approach(this.steer, want, (Math.abs(want) < Math.abs(this.steer) || want * this.steer < 0 ? 16 : 12) * dt);
     const vxCar = vdot(this.v, f);
     const limit = assists ? this.steerLimit(vxCar) : LOCK;
     // the rack moves at a finite rate
-    this.steerAngle = approach(this.steerAngle, this.steer * limit, 4.5 * dt);
+    this.steerAngle = approach(this.steerAngle, this.steer * limit, 7 * dt);
 
     let gas = this.noEngine > 0 ? 0 : clamp(input.throttle || 0, 0, 1);
     let pedal = clamp(input.brake || 0, 0, 1);
@@ -310,7 +318,7 @@ export class Car {
 
     // anti-roll bars push down the more compressed side
     const arb = [0, 0, 0, 0];
-    for (const [a, b, k] of [[0, 1, ARB[0]], [2, 3, ARB[1]]]) {
+    for (const [a, b, k] of [[0, 1, SETUP.arb[0]], [2, 3, SETUP.arb[1]]]) {
       if (corner[a] && corner[b]) {
         const d = (corner[a].x - corner[b].x) * k;
         arb[a] = d; arb[b] = -d;
@@ -363,14 +371,14 @@ export class Car {
     const escT = [0, 0, 0, 0];
     if (assists && vxCar > 8 && grounded >= 3) {
       const yaw = vdot(this.w, u); // left positive
-      const lim = (0.95 * MU_REF * GRAVITY * Math.max(0.6, this.load)) / vxCar;
+      const lim = (1.1 * MU_REF * GRAVITY * Math.max(0.6, this.load)) / vxCar;
       const ref = clamp((vxCar * Math.tan(-this.steerAngle)) / WHEELBASE, -lim, lim);
-      const dead = 0.08 + 0.25 * Math.abs(ref);
+      const dead = 0.1 + 0.3 * Math.abs(ref);
       const over = Math.abs(yaw) - Math.abs(ref) - dead; // rotating more than asked (or the wrong way)
       const wrongWay = yaw * ref < 0 && Math.abs(yaw) > dead;
       if (over > 0 || wrongWay) {
         const e = wrongWay ? Math.abs(yaw) : over;
-        const T = clamp(e * 7000, 0, 2600);
+        const T = clamp(e * 12000, 0, 5000);
         if (yaw > 0) escT[1] = T; else escT[0] = T; // spinning left: brake the right front, and vice versa
         drive *= clamp(1 - e * 3, 0, 1);
       } else if (Math.abs(ref) - Math.abs(yaw) > dead) {
@@ -424,7 +432,7 @@ export class Car {
       const vc = this.pointVel(c.at);
       const vx = vdot(vc, fw), vy = vdot(vc, rw);
       const S = SURFACE[c.surf] || SURFACE[SURF.road];
-      const mu = S.mu * clamp(1 - 0.12 * (Fz / FZ_NOM - 1), 0.62, 1.12);
+      const mu = S.mu * SETUP.axleGrip[ax] * clamp(1 - 0.12 * (Fz / FZ_NOM - 1), 0.62, 1.12);
       const den = Math.max(Math.abs(vx), V_MIN);
       const ta = vy / den; // tan of slip angle
       const R = WHEEL_RADIUS;
@@ -499,7 +507,9 @@ export class Car {
       const dragL = [-0.5 * RHO * CDA[0] * sp * vl[0], -0.5 * RHO * CDA[1] * sp * vl[1], -0.5 * RHO * CDA[2] * sp * vl[2]];
       this.applyForce(qrot(this.q, dragL), vadd(this.p, qrot(this.q, DRAG_CENTRE)), dt);
       const vfwd = Math.max(0, vl[2]);
-      for (const wg of WINGS) this.applyForce(vscale(u, -0.5 * RHO * wg.cla * vfwd * vfwd), vadd(this.p, qrot(this.q, wg.p)), dt);
+      const total = 0.5 * RHO * (SETUP.wingCla[0] + SETUP.wingCla[1]) * vfwd * vfwd;
+      const stall = total > 0 ? Math.min(1, (DOWNFORCE_CAP * MASS) / total) : 1;
+      WINGS.forEach((wg, k) => this.applyForce(vscale(u, -0.5 * RHO * SETUP.wingCla[k] * vfwd * vfwd * stall), vadd(this.p, qrot(this.q, wg.p)), dt));
     }
 
     // ---- gravity, integration

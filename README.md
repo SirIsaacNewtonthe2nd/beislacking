@@ -36,9 +36,10 @@ Gamepads work too: the stick steers, RT/A accelerates, LT/X brakes, B respawns. 
   - Suspension: four raycast corners with springs, separate bump and rebound damping, anti-roll bars and bump stops.
   - Tyres: each wheel spins on its own with a combined-slip, load-sensitive Pacejka-style model, so grip is shared between braking, driving and cornering. Weight transfer comes out of the physics.
   - Engine and gearbox: torque curve, rev limiter, engine braking, launch clutch, 7-speed automatic with reverse, and a limited-slip rear differential.
-  - Brakes and aero: brakes with front bias; front and rear wing downforce and body drag. Downforce adds grip at speed and shortens jumps.
+  - Brakes and aero: brakes with front bias; front and rear wing downforce (stalling beyond 3x the car's weight) and body drag. Downforce adds grip at speed and shortens jumps.
   - Driving aids (on by default, toggle in the menu): ABS, traction control, stability control (brakes a single front wheel) and speed-sensitive steering.
-  - Rough figures: 0-100 km/h in 1.7 s, 0-200 km/h in 3.1 s, top speed about 400 km/h, 200-0 km/h in about 38 m, cornering grip of 2.6 g at low speed rising to about 5.8 g at 250 km/h.
+  - Rough figures: 0-100 km/h in 1.7 s, 0-200 km/h in 3.1 s, top speed about 400 km/h, 200-0 km/h in about 33 m, cornering grip of about 2 g at 40 km/h rising to about 6.8 g at 250 km/h.
+  - Handling balance (front/rear tyre grip, anti-roll bars, aero split) lives in `SETUP` in `src/car.js`; `tools/handling.mjs` checks it for spins and can grid-search it.
 - **Surfaces:** road, dirt (slides), ice (barely grips), grass (slow).
 - **Effect pads:** engine off, no steering, and reset.
 - **Pieces:** straights; tight, medium and wide turns; banked turns (they tilt about the centre line, so they need a level of height beneath them) and wall turns; slopes; jump ramps with a straight lip; gaps; air checkpoints; and a loop with clothoid entry and exit. The editor also has raise/lower tools to change the height of the next piece.
@@ -62,6 +63,7 @@ src/main.js       app flow, HUD, finish screen
 src/tracks.js     campaign tracks
 tools/sim.mjs     headless bot run of every campaign track (`--write` stores author times)
 tools/map.mjs     ASCII map of a track layout, to spot overlaps
+tools/handling.mjs  skid-pad stability check and setup search
 ```
 
 The physics modules have no browser dependencies, so `node tools/sim.mjs` drives every track headlessly and checks that each one can be finished.

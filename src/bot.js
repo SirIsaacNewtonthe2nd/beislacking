@@ -2,7 +2,7 @@
 // be finished with the real physics, and to set medal times.
 
 import { vsub, vdot, vdist, clamp } from './math.js';
-import { GRAVITY, DOWNFORCE_PER_MASS, SURFACE_MU } from './car.js';
+import { GRAVITY, DOWNFORCE_PER_MASS, DOWNFORCE_CAP, SURFACE_MU } from './car.js';
 
 const WHEELBASE = 2.75;
 
@@ -100,13 +100,18 @@ export function planSpeeds(line, margin = 0.66) {
     }
     const mu = line[i].surf === 'air' ? SURFACE_MU.road * margin : muAt(i);
     const g = GRAVITY * Math.max(0.2, line[i].u[1]);
-    const denom = k - mu * (D + kv);
+    let denom = k - mu * (D + kv);
     v[i] = denom <= 1e-6 ? 300 : Math.min(300, Math.sqrt((mu * g) / denom));
+    if (D * v[i] * v[i] > DOWNFORCE_CAP) {
+      // past the downforce cap the extra grip stops growing with speed
+      denom = k - mu * kv;
+      v[i] = denom <= 1e-6 ? 300 : Math.min(v[i], Math.sqrt((mu * (g + DOWNFORCE_CAP)) / denom));
+    }
   }
   for (let i = n - 2; i >= 0; i--) {
     const ds = Math.max(0, line[i + 1].d - line[i].d);
     const mu = muAt(i) * 0.9;
-    const a = mu * (GRAVITY + D * v[i + 1] * v[i + 1]);
+    const a = mu * (GRAVITY + Math.min(DOWNFORCE_CAP, D * v[i + 1] * v[i + 1]));
     v[i] = Math.min(v[i], Math.sqrt(v[i + 1] * v[i + 1] + 2 * a * ds));
   }
   return v;
