@@ -15,62 +15,65 @@ export const GRAVITY = 9.81;
 export const MAX_SPEED = 1000 / 3.6;
 
 // ---------------------------------------------------------------- chassis
-export const MASS = 750;                       // kg, with driver
-const INERTIA = [1000, 1150, 300];             // kg m^2 about local x (pitch), y (yaw), z (roll)
+export const MASS = 700;                       // kg, with driver
+const INERTIA = [900, 950, 280];               // kg m^2 about local x (pitch), y (yaw), z (roll)
 const INV_I = INERTIA.map((x) => 1 / x);
 export const WHEEL_RADIUS = 0.34;
 export const REST = 0.3;                       // mount to wheel centre, spring unloaded
-const MOUNT_Y = 0.203;                         // gives ~40 cm centre-of-mass height at rest
+const MOUNT_Y = 0.314;                         // centre of mass ~30 cm above the road at rest
+// Wide track and low centre of mass: the car can only tip once its grip (in g)
+// passes track / (2 * height), here ~3.3 g, above what the tyres can give.
 export const WHEELS = [
-  { pos: [0.86, MOUNT_Y, 1.45], front: true, left: true },
-  { pos: [-0.86, MOUNT_Y, 1.45], front: true, left: false },
-  { pos: [0.84, MOUNT_Y, -1.3], front: false, left: true },
-  { pos: [-0.84, MOUNT_Y, -1.3], front: false, left: false },
+  { pos: [1.0, MOUNT_Y, 1.45], front: true, left: true },
+  { pos: [-1.0, MOUNT_Y, 1.45], front: true, left: false },
+  { pos: [0.98, MOUNT_Y, -1.3], front: false, left: true },
+  { pos: [-0.98, MOUNT_Y, -1.3], front: false, left: false },
 ];
 const WHEELBASE = 2.75;
 const RAY = REST + WHEEL_RADIUS;
-const TRAVEL = 0.12;                           // bump stop engages here
-const SPRING = [45000, 52000];                 // N/m front, rear: ~2.5 Hz, ~4 cm of droop
-const DAMP_BUMP = [2700, 3000];                // N s/m
-const DAMP_REBOUND = [3800, 4200];
-const ARB = [26000, 16000];                    // anti-roll bar, N/m of compression difference
+const TRAVEL = 0.13;                           // bump stop engages here
+const SPRING = [62000, 70000];                 // N/m front, rear: ~3 Hz, ~2.6 cm of droop
+const DAMP_BUMP = [3100, 3400];                // N s/m
+const DAMP_REBOUND = [4400, 4800];
+const ARB = [30000, 20000];                    // anti-roll bar, N/m of compression difference
 const BUMP_K = 2.0e6;
 const BUMP_C = 38000;                           // close to critical for the bump stop, so it doesn't chatter
 const WHEEL_INERTIA = [1.0, 1.25];             // kg m^2 incl. brake disc / driveline share
 
 // collision spheres (local): tub, nose, wings, sidepods and the four wheels.
-// Ground is at y = -0.40 at rest; the floor clears it by ~12 cm and the bump
+// Ground is at y = -0.30 at rest; the floor clears it by ~12 cm and the bump
 // stops end the travel before the floor can touch.
 const BODY = [
-  { p: [0, -0.03, 0.7], r: 0.25 },
-  { p: [0, -0.02, -0.2], r: 0.26 },
-  { p: [0, 0.0, -1.0], r: 0.27 },
-  { p: [0, -0.09, 1.75], r: 0.19 },
-  { p: [0, -0.1, 2.3], r: 0.16 },
-  { p: [0.52, -0.06, -0.1], r: 0.22 },
-  { p: [-0.52, -0.06, -0.1], r: 0.22 },
-  { p: [0, 0.35, -1.9], r: 0.3 },
-  ...WHEELS.map((w) => ({ p: [w.pos[0], 0.04, w.pos[2]], r: 0.22 })),
+  { p: [0, 0.07, 0.7], r: 0.25 },
+  { p: [0, 0.08, -0.2], r: 0.26 },
+  { p: [0, 0.1, -1.0], r: 0.27 },
+  { p: [0, 0.01, 1.75], r: 0.19 },
+  { p: [0, 0.0, 2.3], r: 0.16 },
+  { p: [0.55, 0.04, -0.1], r: 0.22 },
+  { p: [-0.55, 0.04, -0.1], r: 0.22 },
+  { p: [0, 0.45, -1.9], r: 0.3 },
+  ...WHEELS.map((w) => ({ p: [w.pos[0], 0.14, w.pos[2]], r: 0.22 })),
 ];
 
 // ---------------------------------------------------------------- powertrain
-const TORQUE_CURVE = [[0, 160], [3000, 230], [6000, 320], [9000, 380], [11000, 355], [12500, 300], [13200, 250]];
+// ~900 kW peak: a high-output racing engine
+const TORQUE_CURVE = [[0, 350], [3000, 510], [6000, 700], [9000, 840], [11000, 780], [12500, 660], [13200, 550]];
 const IDLE = 3000, REDLINE = 12800, LAUNCH = 6500;
 export const GEARS = [3.8, 4.2, 3.41, 2.77, 2.25, 1.83, 1.49, 1.24]; // [reverse, 1st..7th]
-const FINAL = 4.05;
+const FINAL = 3.15;                            // geared for ~410 km/h in 7th
 const DRIVELINE = 0.92;
 const SHIFT_TIME = 0.05;
 const UPSHIFT = 12300, DOWNSHIFT = 7200;
 const LSD = 0.25;                              // share of drive torque the diff can move side to side
-const BRAKE_TORQUE = 3200;                     // N m per wheel at full pedal, before bias
+const BRAKE_TORQUE = 5600;                     // N m per wheel at full pedal, before bias
 const BRAKE_BIAS = 0.67;                       // front share
 
 // ---------------------------------------------------------------- aero
 const RHO = 1.225;
-const CDA = [2.4, 3.0, 1.0];                   // body drag area along local x, y, z (m^2)
+const CDA = [2.4, 3.0, 0.85];                  // body drag area along local x, y, z (m^2)
 const DRAG_CENTRE = [0, 0.05, -0.35];
-const WINGS = [{ p: [0, -0.25, 2.25], cla: 1.35 }, { p: [0, 0.6, -1.95], cla: 1.85 }];
-export const DOWNFORCE_PER_MASS = (0.5 * RHO * 3.2) / MASS; // m/s^2 per (m/s)^2, used by the bot
+const WINGS = [{ p: [0, -0.25, 2.25], cla: 1.9 }, { p: [0, 0.6, -1.95], cla: 2.6 }];
+export const DOWNFORCE_PER_MASS = (0.5 * RHO * 4.5) / MASS; // m/s^2 per (m/s)^2, used by the bot
 
 // ---------------------------------------------------------------- tyres
 // Combined slip: slip ratio and slip angle are normalised by their peak values
@@ -93,24 +96,25 @@ const V_MIN = 3; // m/s: slip denominators never go below this, which keeps stan
 
 // mu: peak friction, kp / ap: slip ratio / slip angle at peak, rr: rolling resistance coefficient
 const SURFACE = {
-  [SURF.road]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.turbo]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.turbo2]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.noengine]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.nosteer]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.reset]: { mu: 1.7, kp: 0.1, ap: 0.12, rr: 0.015 },
-  [SURF.plastic]: { mu: 1.3, kp: 0.1, ap: 0.12, rr: 0.02 },
-  [SURF.dirt]: { mu: 0.8, kp: 0.22, ap: 0.24, rr: 0.05 },
-  [SURF.grass]: { mu: 0.55, kp: 0.2, ap: 0.2, rr: 0.09 },
-  [SURF.ice]: { mu: 0.12, kp: 0.08, ap: 0.1, rr: 0.01 },
+  [SURF.road]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.turbo]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.turbo2]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.noengine]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.nosteer]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.reset]: { mu: 2.8, kp: 0.08, ap: 0.09, rr: 0.015 },
+  [SURF.plastic]: { mu: 2.1, kp: 0.08, ap: 0.09, rr: 0.02 },
+  [SURF.dirt]: { mu: 1.35, kp: 0.2, ap: 0.2, rr: 0.04 },
+  [SURF.grass]: { mu: 0.9, kp: 0.18, ap: 0.18, rr: 0.08 },
+  [SURF.ice]: { mu: 0.22, kp: 0.08, ap: 0.1, rr: 0.01 },
 };
 export const SURFACE_MU = Object.fromEntries(Object.entries(SURF).map(([k, v]) => [k, (SURFACE[v] || SURFACE[SURF.road]).mu]));
 
 const BOOST_TIME = 1.4;
-const BOOST_FORCE = { [SURF.turbo]: 5500, [SURF.turbo2]: 9500 }; // N, a thrust on top of the engine
+const BOOST_FORCE = { [SURF.turbo]: 7000, [SURF.turbo2]: 12000 }; // N, a thrust on top of the engine
 export const EFFECT_TIME = 4; // engine-off / no-steering last this long unless reset sooner
 const SURF_NAME = Object.fromEntries(Object.entries(SURF).map(([k, v]) => [v, k]));
-const LOCK = 0.38; // max road-wheel angle, rad
+const LOCK = 0.42; // max road-wheel angle, rad
+const MU_REF = 2.8; // road grip, used by the steering assist and stability control
 
 export function engineTorque(rpm) {
   const c = TORQUE_CURVE;
@@ -243,8 +247,8 @@ export class Car {
   steerLimit(vx) {
     const v = Math.abs(vx);
     if (v < 1) return LOCK;
-    const aLat = 1.6 * GRAVITY * Math.max(0.6, this.load);
-    return Math.min(LOCK, Math.atan((WHEELBASE * aLat) / (v * v)) + 0.04);
+    const aLat = 0.95 * MU_REF * GRAVITY * Math.max(0.6, this.load);
+    return Math.min(LOCK, Math.atan((WHEELBASE * aLat) / (v * v)) + 0.035);
   }
 
   step(input, dt) {
@@ -263,11 +267,11 @@ export class Car {
     // ---- driver inputs
     const want = this.noSteer > 0 ? 0 : clamp(input.steer || 0, -1, 1);
     if (input.analog) this.steer = want;
-    else this.steer = approach(this.steer, want, (Math.abs(want) < Math.abs(this.steer) || want * this.steer < 0 ? 7 : 5) * dt);
+    else this.steer = approach(this.steer, want, (Math.abs(want) < Math.abs(this.steer) || want * this.steer < 0 ? 11 : 8) * dt);
     const vxCar = vdot(this.v, f);
     const limit = assists ? this.steerLimit(vxCar) : LOCK;
     // the rack moves at a finite rate
-    this.steerAngle = approach(this.steerAngle, this.steer * limit, 2.2 * dt);
+    this.steerAngle = approach(this.steerAngle, this.steer * limit, 4.5 * dt);
 
     let gas = this.noEngine > 0 ? 0 : clamp(input.throttle || 0, 0, 1);
     let pedal = clamp(input.brake || 0, 0, 1);
@@ -359,9 +363,9 @@ export class Car {
     const escT = [0, 0, 0, 0];
     if (assists && vxCar > 8 && grounded >= 3) {
       const yaw = vdot(this.w, u); // left positive
-      const lim = (1.6 * GRAVITY * Math.max(0.6, this.load)) / vxCar;
+      const lim = (0.95 * MU_REF * GRAVITY * Math.max(0.6, this.load)) / vxCar;
       const ref = clamp((vxCar * Math.tan(-this.steerAngle)) / WHEELBASE, -lim, lim);
-      const dead = 0.06 + 0.2 * Math.abs(ref);
+      const dead = 0.08 + 0.25 * Math.abs(ref);
       const over = Math.abs(yaw) - Math.abs(ref) - dead; // rotating more than asked (or the wrong way)
       const wrongWay = yaw * ref < 0 && Math.abs(yaw) > dead;
       if (over > 0 || wrongWay) {
@@ -378,7 +382,7 @@ export class Car {
     // ---- per-wheel: suspension force, tyre forces, wheel spin
     let load = 0, maxSlip = 0;
     const surfCount = {};
-    let axleTorque = 0; // net drive minus brake torque the wheels took from the chassis
+    let axleTorque = 0; // torque that went into spinning the wheels up or down
     for (let i = 0; i < 4; i++) {
       const wd = this.wheels[i];
       const def = WHEELS[i];
@@ -450,7 +454,9 @@ export class Car {
       let om1 = om0 + (dt * (driveT[i] - Fx0 * R)) / (Iw + dt * R * dFdom);
       om1 = brakeTo(om1, (bT / Iw) * dt, om0);
       const [Fx, Fy, s] = fx(om1);
-      axleTorque += ((om1 - om0) * Iw) / dt + Fx * R;
+      // the tyre force at the contact patch already carries the drive/brake
+      // torque's effect on the chassis; only the wheel's own spin-up is extra
+      axleTorque += ((om1 - om0) * Iw) / dt;
       wd.fx = Fx; wd.fy = Fy;
       wd.omega = om1;
       wd.slip = s;

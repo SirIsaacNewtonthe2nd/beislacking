@@ -32,13 +32,13 @@ Gamepads work too: the stick steers, RT/A accelerates, LT/X brakes, B respawns. 
 ## What's in it
 
 - **Driving physics (SI units):**
-  - Car: a 750 kg rigid body with a real inertia tensor, real gravity and conserved angular momentum.
+  - Car: a 700 kg, ~900 kW high-downforce racer; a rigid body with a real inertia tensor, real gravity and conserved angular momentum. A wide track and low centre of mass keep it from tipping at its grip limit.
   - Suspension: four raycast corners with springs, separate bump and rebound damping, anti-roll bars and bump stops.
   - Tyres: each wheel spins on its own with a combined-slip, load-sensitive Pacejka-style model, so grip is shared between braking, driving and cornering. Weight transfer comes out of the physics.
   - Engine and gearbox: torque curve, rev limiter, engine braking, launch clutch, 7-speed automatic with reverse, and a limited-slip rear differential.
   - Brakes and aero: brakes with front bias; front and rear wing downforce and body drag. Downforce adds grip at speed and shortens jumps.
   - Driving aids (on by default, toggle in the menu): ABS, traction control, stability control (brakes a single front wheel) and speed-sensitive steering.
-  - Rough figures: 0-100 km/h in about 2 s, top speed about 300 km/h, 200-0 km/h in about 70 m, 1.5 g of cornering grip at low speed rising to 2.6 g at 250 km/h.
+  - Rough figures: 0-100 km/h in 1.7 s, 0-200 km/h in 3.1 s, top speed about 400 km/h, 200-0 km/h in about 38 m, cornering grip of 2.6 g at low speed rising to about 5.8 g at 250 km/h.
 - **Surfaces:** road, dirt (slides), ice (barely grips), grass (slow).
 - **Effect pads:** engine off, no steering, and reset.
 - **Pieces:** straights; tight, medium and wide turns; banked turns (they tilt about the centre line, so they need a level of height beneath them) and wall turns; slopes; jump ramps with a straight lip; gaps; air checkpoints; and a loop with clothoid entry and exit. The editor also has raise/lower tools to change the height of the next piece.

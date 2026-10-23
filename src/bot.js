@@ -90,7 +90,7 @@ export function planSpeeds(line, margin = 0.66) {
   const n = line.length;
   const v = new Float64Array(n);
   const D = DOWNFORCE_PER_MASS;
-  const muAt = (i) => (line[i].surf === 'air' ? 0 : (SURFACE_MU[line[i].surf] ?? 1.7) * margin);
+  const muAt = (i) => (line[i].surf === 'air' ? 0 : (SURFACE_MU[line[i].surf] ?? SURFACE_MU.road) * margin);
   // lateral need v^2 k must fit in mu * (g * up_y + v^2 * (vcurv + D))
   for (let i = 0; i < n; i++) {
     let k = 0, kv = Infinity;
@@ -98,7 +98,7 @@ export function planSpeeds(line, margin = 0.66) {
       k = Math.max(k, Math.abs(line[m].curv));
       kv = Math.min(kv, line[m].vcurv || 0);
     }
-    const mu = line[i].surf === 'air' ? 1.7 * margin : muAt(i);
+    const mu = line[i].surf === 'air' ? SURFACE_MU.road * margin : muAt(i);
     const g = GRAVITY * Math.max(0.2, line[i].u[1]);
     const denom = k - mu * (D + kv);
     v[i] = denom <= 1e-6 ? 300 : Math.min(300, Math.sqrt((mu * g) / denom));

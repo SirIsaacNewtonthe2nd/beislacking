@@ -6,7 +6,7 @@ import { vadd, vsub, vscale, vdot, vaddScaled } from './math.js';
 export const DT = 1 / 200;
 export const COUNTDOWN = 1.6;
 const GHOST_EVERY = 10; // ticks between ghost samples (20 Hz)
-const SPAWN_HEIGHT = 0.42; // centre of mass above the road at rest
+const SPAWN_HEIGHT = 0.31; // centre of mass above the road at rest
 
 export class Race {
   constructor(built, world) {
