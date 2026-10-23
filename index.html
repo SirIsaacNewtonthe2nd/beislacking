@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Gridrun</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <meta name="description" content="Time-trial racing on block-built tracks, with a track editor.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -342,7 +344,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
   <div class="ehint">Click a piece to select it · drag to orbit · right-drag to pan · scroll to zoom</div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="vendor/three.min.js"></script>
 <script type="module" src="src/main.js"></script>
 </body>
 </html>

@@ -207,16 +207,25 @@ export function pieceToken(p) {
   return p.type + (p.surf && p.surf !== 'road' ? ':' + p.surf : '') + (p.walls === false ? '!' : '');
 }
 
+// Tracks also arrive from pasted share codes, so everything is coerced to
+// known piece types, surfaces and plain numbers before use.
 export function parseTrack(def) {
-  const pieces = (Array.isArray(def.pieces) ? def.pieces : def.pieces.trim().split(/\s+/)).map((t) => (typeof t === 'string' ? parsePiece(t) : t));
+  const raw = Array.isArray(def.pieces) ? def.pieces : String(def.pieces || '').trim().split(/\s+/);
+  const pieces = raw
+    .map((t) => (typeof t === 'string' ? parsePiece(t) : t))
+    .filter((p) => p && Object.hasOwn(PIECES, p.type))
+    .map((p) => ({ type: p.type, surf: SURFACES.includes(p.surf) ? p.surf : 'road', walls: p.walls !== false }));
+  const st = def.start || {};
+  const num = (x, lo, hi, d) => (Number.isInteger(x) ? Math.min(hi, Math.max(lo, x)) : d);
+  const m = def.medals;
   return {
-    id: def.id || null,
-    name: def.name || 'Untitled',
-    author: def.author || '',
-    laps: def.laps || 1,
-    start: def.start || { i: 20, j: 20, k: 1, h: 0 },
+    id: typeof def.id === 'string' ? def.id : null,
+    name: String(def.name || 'Untitled').slice(0, 60),
+    author: String(def.author || '').slice(0, 60),
+    laps: num(def.laps, 1, 9, 1),
+    start: { i: num(st.i, 0, GRID - 1, 20), j: num(st.j, 0, GRID - 1, 20), k: num(st.k, 0, MAX_LEVEL, 1), h: num(st.h, 0, 3, 0) },
     pieces,
-    medals: def.medals || null,
+    medals: m && typeof m.key === 'string' && Number.isFinite(m.author) ? { key: m.key, author: m.author } : null,
   };
 }
 

@@ -11,7 +11,17 @@ npx http-server -c-1 -p 8080 .
 # then open http://localhost:8080
 ```
 
-It also works on GitHub Pages: point Pages at the repository root.
+It also works on GitHub Pages: point Pages at the repository root. three.js is included in `vendor/`, so the page loads no scripts from other sites.
+
+## Security
+
+The game uses no API keys, accounts or servers; it keeps best times, ghosts, tracks and settings in the browser's local storage.
+
+- A Content-Security-Policy in `index.html` only runs scripts from the site itself and blocks all outgoing requests (`connect-src 'none'`), so injected code couldn't send data anywhere.
+- Pasted share codes are reduced to known pieces, surfaces and numbers, and track names are only shown as text.
+- `.gitignore` excludes `.env` and key files.
+
+Don't put an API key in this or any static site: everything the browser downloads is public. Keys belong on a server. GitHub Pages serves all of a user's repositories from one origin (`<user>.github.io`), so those pages share local storage too.
 
 ## Controls
 
@@ -64,6 +74,7 @@ src/tracks.js     campaign tracks
 tools/sim.mjs     headless bot run of every campaign track (`--write` stores author times)
 tools/map.mjs     ASCII map of a track layout, to spot overlaps
 tools/handling.mjs  skid-pad stability check and setup search
+vendor/           three.js r128 (MIT)
 ```
 
 The physics modules have no browser dependencies, so `node tools/sim.mjs` drives every track headlessly and checks that each one can be finished.

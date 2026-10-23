@@ -1,2 +1,10 @@
 node_modules/
 .DS_Store
+
+# keys and credentials never belong in this repo
+.env
+.env.*
+*.pem
+*.key
+*.p12
+secrets*

@@ -401,7 +401,6 @@ $('mytracks').addEventListener('click', (e) => {
   const entry = list.find((x) => x.id === id);
   if (!entry) return;
   const t = parseTrack(entry.track);
-  t.medals = entry.track.medals || null;
   if (b.dataset.uplay) startRace(t, { kind: 'user', name: entry.name });
   else if (b.dataset.uedit) openEditor(t, entry.id);
   else if (b.dataset.ucode) openCode('export', t);
@@ -428,7 +427,6 @@ function newTrack() {
   const draft = store.load('draft', null);
   if (draft && draft.track && !draft.userId && draft.track.pieces && draft.track.pieces.length > 1) {
     const t = parseTrack(draft.track);
-    t.medals = draft.track.medals || null;
     return t;
   }
   return parseTrack({ name: 'My track', start: { i: 20, j: 4, k: 1, h: 0 }, pieces: 'START' });
@@ -467,7 +465,6 @@ function decodeTrack(code) {
   const json = decodeURIComponent(escape(atob(body)));
   const def = JSON.parse(json);
   const t = parseTrack(def);
-  t.medals = def.medals || null;
   if (!t.pieces.length || t.pieces[0].type !== 'START') throw new Error('no start');
   return t;
 }
