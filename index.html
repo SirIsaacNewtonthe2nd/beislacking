@@ -63,9 +63,12 @@ button { font: inherit; color: inherit; }
 #split .cpt { color: var(--muted); font-size: 16px; margin-left: 8px; font-weight: 600; }
 #hud .speedo { position: absolute; right: max(18px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); text-align: right; pointer-events: none; }
 #speed { font: 800 clamp(40px, 7vw, 64px)/0.9 var(--display); text-shadow: 0 2px 6px rgba(0,0,0,.45); }
+#hud .gearrow { display: flex; align-items: baseline; justify-content: flex-end; gap: 12px; }
+#gear { font: 800 clamp(22px, 3.4vw, 30px)/1 var(--display); color: var(--accent); text-shadow: 0 1px 4px rgba(0,0,0,.5); }
 #hud .speedo .unit { font: 600 13px/1 var(--display); letter-spacing: .14em; color: var(--muted); }
 #speedbar { width: 150px; height: 5px; background: rgba(0,0,0,.35); border-radius: 3px; margin-top: 6px; margin-left: auto; overflow: hidden; }
 #speedbar i { display: block; height: 100%; width: 0; background: var(--fg); border-radius: 3px; }
+#speedbar i.shift { background: var(--behind); }
 #speedbar i.boost { background: var(--accent); }
 #hud .hints { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(14px, env(safe-area-inset-bottom, 0px)); font: 500 12px/1.6 var(--body); color: rgba(238,242,248,.75); text-shadow: 0 1px 2px rgba(0,0,0,.7); pointer-events: none; }
 kbd { font: 600 11px/1 var(--body); padding: 2px 5px; border-radius: 3px; border: 1px solid rgba(255,255,255,.3); background: rgba(0,0,0,.35); }
@@ -210,9 +213,9 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
     <div id="timer" class="num">0.000</div>
   </div>
   <div class="speedo">
-    <div id="speed" class="num">0</div>
+    <div class="gearrow"><span id="gear" class="num" title="Gear">1</span><span id="speed" class="num">0</span></div>
     <div class="unit">KM/H</div>
-    <div id="speedbar"><i></i></div>
+    <div id="speedbar" title="Engine speed"><i></i></div>
   </div>
   <div class="hints"><kbd>Enter</kbd> respawn at checkpoint &nbsp; <kbd>Backspace</kbd> restart &nbsp; <kbd>C</kbd> camera &nbsp; <kbd>Esc</kbd> menu</div>
 </div>
@@ -240,6 +243,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
       <div class="settings panel">
         <label class="toggle">Show ghost of best run <input type="checkbox" id="set-ghost"></label>
         <label class="toggle">Sound <input type="checkbox" id="set-sound"></label>
+        <label class="toggle" title="Anti-lock brakes, traction and stability control, and speed-sensitive steering">Driving aids <input type="checkbox" id="set-assists"></label>
       </div>
     </div>
     <div class="main">
@@ -291,16 +295,16 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
     <h2>Controls</h2>
     <dl class="controls-list">
       <dt><kbd>↑</kbd> <kbd>W</kbd></dt><dd>Accelerate</dd>
-      <dt><kbd>↓</kbd> <kbd>S</kbd></dt><dd>Brake, then reverse</dd>
-      <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>A</kbd> <kbd>D</kbd></dt><dd>Steer. In the air, steering turns the car</dd>
-      <dt>Brake + steer</dt><dd>Start a drift above about 80 km/h. Hold the steer to keep it, countersteer to end it</dd>
+      <dt><kbd>↓</kbd> <kbd>S</kbd></dt><dd>Brake; hold it at a standstill to reverse</dd>
+      <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>A</kbd> <kbd>D</kbd></dt><dd>Steer</dd>
+      <dt>In the air</dt><dd>Steering does nothing. Throttle spins the wheels up and lifts the nose; brake stops them and drops it</dd>
       <dt><kbd>Enter</kbd></dt><dd>Respawn at the last checkpoint with the speed you had there</dd>
       <dt><kbd>Backspace</kbd></dt><dd>Restart the run</dd>
       <dt><kbd>C</kbd> / <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>Change camera</dd>
       <dt><kbd>G</kbd> · <kbd>M</kbd></dt><dd>Toggle ghost · mute</dd>
       <dt>Gamepad</dt><dd>Stick steers, RT or A accelerates, LT or X brakes, B respawns, View restarts</dd>
     </dl>
-    <p class="note">Surfaces: dirt slides, ice barely grips, grass is slow. Yellow pads boost, red pads boost harder. Black pads cut the engine and purple pads lock the steering for 4 seconds; green pads cancel both.</p>
+    <p class="note">The car is a 750 kg open-wheeler with real tyre grip, weight transfer, downforce and a 7-speed automatic. Brake before corners, not in them. Driving aids (ABS, traction and stability control, speed-sensitive steering) are on by default; turn them off in the menu for a raw car that locks wheels and spins if you're rough. Dirt slides, ice barely grips, grass is slow. Yellow and red pads push the car forward. Black pads cut the engine and purple pads lock the steering for 4 seconds; green pads cancel both.</p>
     <div class="actions"><button class="btn primary" id="btn-controls-close">Got it</button></div>
   </div>
 </div>

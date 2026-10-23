@@ -13,13 +13,13 @@ const verbose = args.includes('--verbose');
 const write = args.includes('--write'); // store bot times as author medals in src/tracks.js
 const only = args.find((a) => !a.startsWith('--'));
 
-export function simulate(def, { log = false, maxTime = 240 } = {}) {
+export function simulate(def, { log = false, maxTime = 240, margin } = {}) {
   const track = parseTrack(def);
   const built = buildTrack(track);
   if (built.layout.problems.size) return { error: 'layout problems at pieces ' + [...built.layout.problems].join(',') };
   const world = new World(built.tris);
   const race = new Race(built, world);
-  const bot = new Bot(built);
+  const bot = new Bot(built, margin ? { margin } : {});
   const events = [];
   race.on((e) => events.push(e));
   let lastLog = -1;
@@ -47,6 +47,14 @@ if (process.argv[1].endsWith('sim.mjs')) {
     if (r.error) { console.log(`${def.id} ${def.name}: ${r.error}`); continue; }
     console.log(`${def.id.padEnd(4)} ${def.name.padEnd(18)} time=${r.time ?? 'DNF'} respawns=${r.respawns} cps=${r.cps} top=${r.top.toFixed(0)}km/h tris=${r.tris} (${ms}ms)`);
     if (r.time && !r.respawns) times[def.id] = r.time;
+    if (write) {
+      // author time: the fastest clean run from a bolder driver
+      for (const margin of [0.82, 0.78, 0.74, 0.7]) {
+        const b = simulate(def, { margin });
+        if (b.time && !b.respawns && (!times[def.id] || b.time < times[def.id])) times[def.id] = b.time;
+      }
+      console.log(`     author ${times[def.id] ?? '-'}`);
+    }
   }
   if (write) {
     const file = new URL('../src/tracks.js', import.meta.url);

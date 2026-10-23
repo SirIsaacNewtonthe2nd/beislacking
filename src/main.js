@@ -222,9 +222,10 @@ function updateHUD(s, inp) {
   $('timer').textContent = fmtTime(t);
   const kmh = Math.round(car.speed * 3.6);
   $('speed').textContent = kmh;
+  $('gear').textContent = car.gear < 0 ? 'R' : car.gear;
   const bar = $('speedbar').firstElementChild;
-  bar.style.width = Math.min(100, (kmh / 600) * 100) + '%';
-  bar.className = car.boost > 0 ? 'boost' : '';
+  bar.style.width = Math.min(100, (car.rpm / 12800) * 100) + '%';
+  bar.className = car.boost > 0 ? 'boost' : car.rpm > 12000 ? 'shift' : '';
   const total = race.cps.length;
   $('hud-cp').innerHTML = total ? `<small>CP</small>${race.taken.size}/${total}` : '';
   $('hud-lap').innerHTML = race.multilap ? `<small>LAP</small>${race.lap}/${race.laps}` : '';
@@ -254,7 +255,7 @@ function updateHUD(s, inp) {
   if (fx.innerHTML !== fxHtml) fx.innerHTML = fxHtml;
   const bn = $('banner');
   if (s.banner && now < s.banner.until) { bn.hidden = false; bn.textContent = s.banner.text; } else bn.hidden = true;
-  sound.engine(car.speed * 3.6, inp.throttle, race.phase === 'running' && !app.paused);
+  sound.engine(car.rpm, inp.throttle, race.phase === 'running' && !app.paused, car.grounded ? car.tyreSlip : 0, car.speed);
 }
 
 let last = performance.now();
@@ -262,6 +263,7 @@ function frame(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   const inp = input.read();
+  inp.assists = settings.assists;
   if (app.mode === 'race' && app.session) {
     if (!app.paused) stepSession(app.session, inp, dt);
     drawSession(app.session, app.paused ? 0 : dt);
@@ -438,6 +440,8 @@ $('btn-controls').onclick = () => showOverlay('controls');
 $('btn-controls-close').onclick = () => (app.mode === 'race' && app.paused ? showOverlay('pause') : hideOverlay());
 $('set-ghost').checked = settings.ghost;
 $('set-sound').checked = settings.sound;
+$('set-assists').checked = settings.assists;
+$('set-assists').onchange = (e) => { settings.assists = e.target.checked; store.setSettings(settings); };
 $('set-ghost').onchange = (e) => { settings.ghost = e.target.checked; store.setSettings(settings); };
 $('set-sound').onchange = (e) => { settings.sound = e.target.checked; store.setSettings(settings); sound.setMuted(!settings.sound); if (settings.sound) sound.start(); };
 $('btn-resume').onclick = () => togglePause(false);

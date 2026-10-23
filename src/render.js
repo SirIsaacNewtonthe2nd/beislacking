@@ -3,7 +3,7 @@
 
 import { GRID, BLOCK } from './pieces.js';
 import { FLOOR_Y } from './collision.js';
-import { WHEEL_RADIUS } from './car.js';
+import { WHEEL_RADIUS, WHEELS, REST } from './car.js';
 
 const SKY = 0x9fc6e8;
 
@@ -60,7 +60,8 @@ function bufferGeometry(buf) {
 }
 
 // An open-wheel racer: narrow tub, exposed wheels, front and rear wings.
-// Local axes: +z forward, +y up, +x left.
+// Local axes: +z forward, +y up, +x left; the origin is the centre of mass,
+// the road is 0.40 m below it at rest.
 export function buildCarModel(color, ghost = false) {
   const group = new THREE.Group();
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c, transparent: ghost, opacity: ghost ? 0.38 : 1, depthWrite: !ghost });
@@ -72,56 +73,56 @@ export function buildCarModel(color, ghost = false) {
     group.add(mesh);
     return mesh;
   };
-  // tub and nose
-  box(0.78, 0.4, 2.3, body, 0, -0.02, -0.25);
-  box(0.56, 0.32, 1.1, body, 0, -0.08, 1.4, 0.1);
-  box(0.36, 0.22, 0.6, white, 0, -0.18, 2.15, 0.16);
+  // tub and nose (floor ~12 cm above the road)
+  box(0.78, 0.38, 2.3, body, 0, -0.09, -0.25);
+  box(0.56, 0.3, 1.1, body, 0, -0.13, 1.4, 0.1);
+  box(0.36, 0.2, 0.6, white, 0, -0.2, 2.15, 0.16);
   // cockpit, driver, airbox fin
-  box(0.5, 0.06, 0.9, dark, 0, 0.19, 0.2);
-  box(0.34, 0.3, 0.34, helmet, 0, 0.36, 0.05);
-  box(0.4, 0.42, 0.8, body, 0, 0.3, -0.6, -0.15);
-  box(0.06, 0.32, 0.9, white, 0, 0.52, -1.0, -0.2);
+  box(0.5, 0.06, 0.9, dark, 0, 0.11, 0.2);
+  box(0.34, 0.3, 0.34, helmet, 0, 0.28, 0.05);
+  box(0.4, 0.42, 0.8, body, 0, 0.22, -0.6, -0.15);
+  box(0.06, 0.32, 0.9, white, 0, 0.44, -1.0, -0.2);
   // side pods between the wheels
-  box(0.4, 0.3, 1.25, body, 0.55, -0.1, -0.1);
-  box(0.4, 0.3, 1.25, body, -0.55, -0.1, -0.1);
-  box(0.42, 0.06, 1.27, white, 0.55, 0.06, -0.1);
-  box(0.42, 0.06, 1.27, white, -0.55, 0.06, -0.1);
-  // front wing with end plates
-  box(2.05, 0.05, 0.42, carbon, 0, -0.32, 2.2);
-  box(1.9, 0.04, 0.2, body, 0, -0.24, 2.1, -0.25);
-  box(0.04, 0.22, 0.48, carbon, 1.02, -0.26, 2.2);
-  box(0.04, 0.22, 0.48, carbon, -1.02, -0.26, 2.2);
+  box(0.4, 0.28, 1.25, body, 0.55, -0.15, -0.1);
+  box(0.4, 0.28, 1.25, body, -0.55, -0.15, -0.1);
+  box(0.42, 0.06, 1.27, white, 0.55, 0.0, -0.1);
+  box(0.42, 0.06, 1.27, white, -0.55, 0.0, -0.1);
+  // front wing with end plates, ~10 cm off the road
+  box(2.05, 0.05, 0.42, carbon, 0, -0.29, 2.2);
+  box(1.9, 0.04, 0.2, body, 0, -0.22, 2.1, -0.25);
+  box(0.04, 0.2, 0.48, carbon, 1.02, -0.24, 2.2);
+  box(0.04, 0.2, 0.48, carbon, -1.02, -0.24, 2.2);
   // rear wing on struts
-  box(0.06, 0.55, 0.3, carbon, 0.3, 0.3, -1.82);
-  box(0.06, 0.55, 0.3, carbon, -0.3, 0.3, -1.82);
-  box(1.75, 0.06, 0.5, body, 0, 0.6, -1.88, -0.12);
-  box(1.75, 0.05, 0.22, white, 0, 0.72, -2.08, -0.35);
-  box(0.05, 0.42, 0.66, carbon, 0.9, 0.55, -1.92);
-  box(0.05, 0.42, 0.66, carbon, -0.9, 0.55, -1.92);
+  box(0.06, 0.55, 0.3, carbon, 0.3, 0.22, -1.82);
+  box(0.06, 0.55, 0.3, carbon, -0.3, 0.22, -1.82);
+  box(1.75, 0.06, 0.5, body, 0, 0.52, -1.88, -0.12);
+  box(1.75, 0.05, 0.22, white, 0, 0.64, -2.08, -0.35);
+  box(0.05, 0.42, 0.66, carbon, 0.9, 0.47, -1.92);
+  box(0.05, 0.42, 0.66, carbon, -0.9, 0.47, -1.92);
   // diffuser
-  box(1.0, 0.16, 0.4, carbon, 0, -0.26, -1.65, 0.3);
+  box(1.0, 0.14, 0.4, carbon, 0, -0.27, -1.65, 0.3);
 
   const wheels = [];
-  const tyreGeo = new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.42, 18);
+  const tyreGeo = new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.4, 18);
   tyreGeo.rotateZ(Math.PI / 2);
-  const rimGeo = new THREE.CylinderGeometry(WHEEL_RADIUS * 0.62, WHEEL_RADIUS * 0.62, 0.44, 12);
+  const rimGeo = new THREE.CylinderGeometry(WHEEL_RADIUS * 0.62, WHEEL_RADIUS * 0.62, 0.42, 12);
   rimGeo.rotateZ(Math.PI / 2);
-  const spokeGeo = new THREE.BoxGeometry(0.45, 0.08, WHEEL_RADIUS * 1.15);
+  const spokeGeo = new THREE.BoxGeometry(0.43, 0.08, WHEEL_RADIUS * 1.15);
   const rimMat = mat(0xb9c0c9);
-  const positions = [[0.86, -0.22, 1.38], [-0.86, -0.22, 1.38], [0.88, -0.22, -1.32], [-0.88, -0.22, -1.32]];
-  for (const p of positions) {
+  for (const w of WHEELS) {
+    const p = w.pos;
     const pivot = new THREE.Group();
-    pivot.position.set(p[0], p[1], p[2]);
+    pivot.position.set(p[0], p[1] - REST, p[2]);
     const spin = new THREE.Group();
     spin.add(new THREE.Mesh(tyreGeo, dark));
     spin.add(new THREE.Mesh(rimGeo, rimMat));
     spin.add(new THREE.Mesh(spokeGeo, carbon));
     pivot.add(spin);
     group.add(pivot);
-    wheels.push({ pivot, spin, base: p[1] });
-    // suspension arms from the tub to the wheel hub
+    wheels.push({ pivot, spin, mount: p[1] });
+    // suspension arms from the tub to the hub
     const arm = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(p[0]) - 0.3, 0.04, 0.06), carbon);
-    arm.position.set(p[0] / 2 + Math.sign(p[0]) * 0.1, -0.12, p[2]);
+    arm.position.set(p[0] / 2 + Math.sign(p[0]) * 0.1, -0.08, p[2]);
     group.add(arm);
   }
   group.userData.wheels = wheels;
@@ -209,9 +210,9 @@ export class Renderer {
     const wheels = this.car.userData.wheels;
     for (let i = 0; i < 4; i++) {
       const w = car.wheels[i];
-      const comp = w.contact ? Math.min(w.comp, 0.36) : 0;
-      wheels[i].pivot.position.y = wheels[i].base - (0.42 - comp);
-      wheels[i].pivot.rotation.y = i < 2 ? -car.steer * 0.42 : 0;
+      const comp = w.contact ? Math.min(w.comp, 0.17) : 0;
+      wheels[i].pivot.position.y = wheels[i].mount - (REST - comp);
+      wheels[i].pivot.rotation.y = i < 2 ? -car.steerAngle : 0;
       wheels[i].spin.rotation.x = w.spin;
     }
     // blob shadow on whatever is below

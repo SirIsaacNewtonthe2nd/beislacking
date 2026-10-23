@@ -1,6 +1,5 @@
-// Tiny synthesized sound: engine tone from speed, plus checkpoint / finish chimes.
-
-const GEARS = [0, 55, 100, 145, 195, 250, 310, 9999]; // km/h shift points
+// Tiny synthesized sound: engine tone from the real engine speed, tyre squeal
+// from tyre slip, plus checkpoint / finish chimes.
 
 export class Sound {
   constructor() {
@@ -34,6 +33,21 @@ export class Sound {
     this.osc1.start();
     this.osc2.start();
     this.filter = filter;
+    // tyre squeal: band-passed noise
+    const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 1400;
+    band.Q.value = 6;
+    this.squeal = ctx.createGain();
+    this.squeal.gain.value = 0;
+    noise.connect(band).connect(this.squeal).connect(this.master);
+    noise.start();
   }
 
   setMuted(m) {
@@ -41,18 +55,17 @@ export class Sound {
     if (this.master) this.master.gain.value = m ? 0 : 0.5;
   }
 
-  engine(kmh, throttle, active) {
+  engine(rpm, throttle, active, slip = 0, speed = 0) {
     if (!this.ctx) return;
-    let g = 1;
-    while (g < GEARS.length - 1 && kmh > GEARS[g]) g++;
-    const lo = GEARS[g - 1], hi = GEARS[g];
-    const rpm = Math.min(1, (kmh - lo) / Math.max(1, hi - lo));
-    const f = 55 + rpm * 110 + g * 8;
     const t = this.ctx.currentTime;
-    this.osc1.frequency.setTargetAtTime(f, t, 0.03);
-    this.osc2.frequency.setTargetAtTime(f * 0.5, t, 0.03);
-    this.filter.frequency.setTargetAtTime(500 + throttle * 900 + rpm * 400, t, 0.05);
-    this.engineGain.gain.setTargetAtTime(active ? 0.12 + throttle * 0.1 : 0, t, 0.08);
+    // a four-stroke engine fires every other turn per cylinder; use a V8-ish tone
+    const f = (rpm / 60) * 2;
+    this.osc1.frequency.setTargetAtTime(Math.max(30, f), t, 0.02);
+    this.osc2.frequency.setTargetAtTime(Math.max(15, f * 0.5), t, 0.02);
+    this.filter.frequency.setTargetAtTime(400 + throttle * 1400 + rpm * 0.05, t, 0.04);
+    this.engineGain.gain.setTargetAtTime(active ? 0.1 + throttle * 0.12 : 0, t, 0.06);
+    const sq = active && speed > 3 ? Math.min(0.22, Math.max(0, slip - 1.05) * 0.25) : 0;
+    this.squeal.gain.setTargetAtTime(sq, t, 0.05);
   }
 
   beep(freqs, dur = 0.12, type = 'sine', vol = 0.25) {

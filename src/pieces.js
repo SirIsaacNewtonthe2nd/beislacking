@@ -35,7 +35,9 @@ function turn(n, side, maxBank = 0, lift = ROAD_HALF) {
     },
     bank: banked ? (u) => sg * maxBank * Math.sin(Math.PI * u) ** 2 : null,
     len,
-    steps: Math.max(6, Math.round(len / 2.5)),
+    // banked pieces twist, so sample them finely to keep the road smooth
+    steps: Math.max(6, Math.round(len / (banked ? 1.2 : 2.5))),
+    cols: banked ? 8 : 1,
     curved: true,
   };
   const cells = [];
@@ -59,43 +61,93 @@ function slope(blocks, levels) {
   return { paths: [path], cells, exit: [blocks, 0, levels, 0] };
 }
 
-// A helical loop: a full turn on the inside of a cylinder whose axis runs
-// sideways, so the exit is one lane over. Driving straight follows a helix on a
-// cylinder, so the car needs very little steering once in the loop.
+// A loop with clothoid entry and exit: curvature builds up gradually, holds,
+// then eases off, like a real rollercoaster or stunt loop, so the load comes
+// on progressively. The profile is extruded along the sideways axis and the
+// line drifts one lane over, so the road is a true general cylinder (flat
+// across, no warp) and the exit doesn't hit the entry.
+const LOOP_KMAX = 1 / 12.5;
+const loopProfile = (() => {
+  const build = (Lt) => {
+    const Lc = (2 * Math.PI) / LOOP_KMAX - Lt;
+    const total = 2 * Lt + Lc, N = 720, ds = total / N;
+    const pts = [[0, 0, 0]]; // s, y, heading angle
+    let s = 0, y = 0, th = 0;
+    for (let i = 1; i <= N; i++) {
+      const sig = (i - 0.5) * ds;
+      const k = sig < Lt ? (LOOP_KMAX * sig) / Lt : sig > Lt + Lc ? (LOOP_KMAX * (total - sig)) / Lt : LOOP_KMAX;
+      th += k * ds;
+      s += Math.cos(th - (k * ds) / 2) * ds;
+      y += Math.sin(th - (k * ds) / 2) * ds;
+      pts.push([s, y, th]);
+    }
+    return { pts, total, N };
+  };
+  // pick the transition length that puts the exit exactly one block ahead
+  let lo = 0, hi = (2 * Math.PI) / LOOP_KMAX;
+  for (let i = 0; i < 50; i++) {
+    const mid = (lo + hi) / 2;
+    const p = build(mid);
+    if (p.pts[p.N][0] < BLOCK) lo = mid; else hi = mid;
+  }
+  return build((lo + hi) / 2);
+})();
+
 function loop(side) {
   const sg = side === 'R' ? 1 : -1;
-  const R = 14;
-  // sideways progress: zero rate at both ends, fastest over the top
-  const g = (u) => u - Math.sin(2 * Math.PI * u) / (2 * Math.PI);
+  const P = loopProfile;
+  const at = (u) => {
+    const x = u * P.N, i = Math.min(P.N - 1, Math.floor(x)), f = x - i;
+    const a = P.pts[i], b = P.pts[i + 1];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+  };
+  // sideways progress: eases in over the first fifth, steady, eases out; a
+  // steady rate keeps the crossing angle (and so the road's warp under the
+  // car) as small as it can be
+  const E = 0.2;
+  const rate = (u) => smoothstep(Math.min(1, u / E)) * smoothstep(Math.min(1, (1 - u) / E));
+  const G = [0];
+  for (let i = 1; i <= 400; i++) G.push(G[i - 1] + rate((i - 0.5) / 400));
+  const g = (u) => {
+    const x = u * 400, i = Math.min(399, Math.floor(x));
+    return (G[i] + (G[i + 1] - G[i]) * (x - i)) / G[400];
+  };
   const path = {
     fn: (u) => {
-      const th = 2 * Math.PI * u;
-      return [R * Math.sin(th), sg * BLOCK * g(u), R * (1 - Math.cos(th))];
+      const [ps, py] = at(u);
+      return [ps, sg * BLOCK * g(u), py];
     },
-    // road normal points at the cylinder axis
     upFn: (u) => {
-      const th = 2 * Math.PI * u;
+      const th = at(u)[2];
       return [-Math.sin(th), 0, Math.cos(th)];
     },
-    len: 2 * Math.PI * R * 1.1,
-    steps: 120,
+    rightAxis: true, // cross-sections run along the loop's axis (local +t)
+    len: P.total,
+    steps: 140,
     curved: true,
     noPillars: true,
   };
+  const top = Math.max(...P.pts.map((q) => q[1]));
+  const levels = Math.ceil((top + 2) / LEVEL);
   const cells = [];
-  for (let c = 0; c < 4; c++) cells.push([0, 0, c], [-1, sg, c]);
-  for (let c = 1; c < 4; c++) cells.push([0, sg, c], [-1, 0, c]);
-  return { paths: [path], cells, exit: [0, sg, 0, 0] };
+  for (let c = 0; c < levels; c++) cells.push([0, 0, c], [0, sg, c]);
+  return { paths: [path], cells, exit: [1, sg, 0, 0] };
 }
 
-function kicker(height) {
+// Jump ramp: a curved run-in, then a straight final 40% so the car leaves the
+// lip at the ramp angle without being spun nose-up.
+function kicker(slope) {
+  const L = BLOCK, a = 0.6 * L, rc = a / slope;
+  const y = (x) => (x <= a ? (x * x) / (2 * rc) : (a * a) / (2 * rc) + slope * (x - a));
   const path = {
-    fn: (u) => [BLOCK * u, 0, height * u * u],
-    len: BLOCK,
-    steps: 12,
+    fn: (u) => [L * u, 0, y(L * u)],
+    len: Math.hypot(L, y(L)),
+    steps: 14,
     curved: true,
   };
-  return { paths: [path], cells: [[0, 0, 0], [0, 0, 1]], exit: [1, 0, 0, 0] };
+  const cells = [];
+  for (let c = 0; c <= Math.floor(y(L) / LEVEL); c++) cells.push([0, 0, c]);
+  return { paths: [path], cells, exit: [1, 0, 0, 0] };
 }
 
 const zone = (u0, u1, surf) => ({ u0, u1, surf });
@@ -113,10 +165,12 @@ export const PIECES = {
   L2: { name: 'Turn left, medium', group: 'Turns', build: () => turn(2, 'L') },
   R3: { name: 'Turn right, wide', group: 'Turns', build: () => turn(3, 'R') },
   L3: { name: 'Turn left, wide', group: 'Turns', build: () => turn(3, 'L') },
-  BR2: { name: 'Banked right', group: 'Turns', build: () => turn(2, 'R', 0.6) },
-  BL2: { name: 'Banked left', group: 'Turns', build: () => turn(2, 'L', 0.6) },
-  BR3: { name: 'Banked right, wide', group: 'Turns', build: () => turn(3, 'R', 0.6) },
-  BL3: { name: 'Banked left, wide', group: 'Turns', build: () => turn(3, 'L', 0.6) },
+  // banked turns tilt about the centre line (the inner edge dips below the
+  // level), so the line through the corner stays flat with no crest to jump off
+  BR2: { name: 'Banked right', group: 'Turns', build: () => turn(2, 'R', 0.35, 0) },
+  BL2: { name: 'Banked left', group: 'Turns', build: () => turn(2, 'L', 0.35, 0) },
+  BR3: { name: 'Banked right, wide', group: 'Turns', build: () => turn(3, 'R', 0.45, 0) },
+  BL3: { name: 'Banked left, wide', group: 'Turns', build: () => turn(3, 'L', 0.45, 0) },
   WR: { name: 'Wall turn right', group: 'Turns', build: () => turn(3, 'R', 1.25, 1.2) },
   WL: { name: 'Wall turn left', group: 'Turns', build: () => turn(3, 'L', 1.25, 1.2) },
   U1: { name: 'Slope up', group: 'Slopes', build: () => slope(2, 1) },
@@ -130,8 +184,8 @@ export const PIECES = {
   NE: { name: 'Engine off', group: 'Special', build: () => ({ paths: [{ ...straightPath(), zones: [zone(0.3, 0.7, 'noengine')] }], cells: [[0, 0, 0]], exit: [1, 0, 0, 0] }) },
   NS: { name: 'No steering', group: 'Special', build: () => ({ paths: [{ ...straightPath(), zones: [zone(0.3, 0.7, 'nosteer')] }], cells: [[0, 0, 0]], exit: [1, 0, 0, 0] }) },
   RS: { name: 'Reset effects', group: 'Special', build: () => ({ paths: [{ ...straightPath(), zones: [zone(0.3, 0.7, 'reset')] }], cells: [[0, 0, 0]], exit: [1, 0, 0, 0] }) },
-  K: { name: 'Kicker', group: 'Special', build: () => kicker(5) },
-  K2: { name: 'Big kicker', group: 'Special', build: () => kicker(9) },
+  K: { name: 'Kicker', group: 'Special', build: () => kicker(0.21) },
+  K2: { name: 'Big kicker', group: 'Special', build: () => kicker(0.36) },
   G: { name: 'Gap', group: 'Special', build: () => ({ paths: [], cells: [], exit: [1, 0, 0, 0] }) },
   LOOPR: { name: 'Loop (exit right)', group: 'Special', build: () => loop('R') },
   LOOPL: { name: 'Loop (exit left)', group: 'Special', build: () => loop('L') },

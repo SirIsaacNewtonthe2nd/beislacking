@@ -27,7 +27,7 @@ export function trackKey(track) {
 
 export const getPB = (key) => load('pb.' + key, null);
 export const setPB = (key, rec) => save('pb.' + key, rec);
-export const getSettings = () => ({ ghost: true, sound: true, camera: 0, ...load('settings', {}) });
+export const getSettings = () => ({ ghost: true, sound: true, camera: 0, assists: true, ...load('settings', {}) });
 export const setSettings = (s) => save('settings', s);
 export const getUserTracks = () => load('tracks', []);
 export const setUserTracks = (list) => save('tracks', list);

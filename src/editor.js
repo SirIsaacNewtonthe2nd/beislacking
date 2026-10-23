@@ -369,7 +369,7 @@ export class Editor {
     lapsSel.disabled = !v.closed;
     lapsSel.value = String(v.closed ? this.track.laps : 1);
     let cls = 'good', msg;
-    if (v.problems) { cls = 'bad'; msg = `<b>${v.problems} piece${v.problems > 1 ? 's' : ''} overlap or leave the stadium.</b> They are shown in red.`; }
+    if (v.problems) { cls = 'bad'; msg = `<b>${v.problems} piece${v.problems > 1 ? 's' : ''} overlap, leave the stadium or dip below ground.</b> They are shown in red. Banked turns need a level of height under them.`; }
     else if (!v.hasFinish && !v.laps) { cls = ''; msg = v.closed ? '<b>Closed circuit.</b> Set laps to 2 or more, or add a Finish.' : '<b>Add a Finish</b> to make the track raceable.'; }
     else msg = `<b>Raceable.</b> ` + (v.author ? `Author time ${fmtTime(v.author)}.` : 'Finish a test drive to set the author time.');
     el.className = 'status ' + cls;

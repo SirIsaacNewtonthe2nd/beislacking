@@ -99,8 +99,14 @@ function samplePath(pl, path) {
     ups = frames(pts, tans, [0, 1, 0], endFlat ? [0, 1, 0] : null);
   }
   if (path.bank) ups = ups.map((U, i) => vrotAxis(U, tans[i], path.bank(uniq[i])));
-  const rights = ups.map((U, i) => vnorm(vcross(tans[i], U)));
-  ups = ups.map((U, i) => vnorm(vcross(rights[i], tans[i])));
+  let rights;
+  if (path.rightAxis) {
+    // cross-sections parallel to a fixed axis: the road stays a true cylinder
+    rights = ups.map(() => vnorm([pl.r[0], 0, pl.r[2]]));
+  } else {
+    rights = ups.map((U, i) => vnorm(vcross(tans[i], U)));
+    ups = ups.map((U, i) => vnorm(vcross(rights[i], tans[i])));
+  }
   const surfAt = (u) => {
     if (path.zones) for (const z of path.zones) if (u >= z.u0 - 1e-6 && u <= z.u1 + 1e-6) return z.surf;
     return pl.piece.surf || 'road';
@@ -149,7 +155,7 @@ export function buildTrack(track, opts = {}) {
         if (i === 0 && line.length) continue;
         const p = vadd(a, vscale(vsub(b, a), i / steps));
         if (line.length) dist += vlen(vsub(p, line[line.length - 1].pos));
-        line.push({ pos: p, t: pl.f, u: [0, 1, 0], r: pl.r, surf: 'air', d: dist, piece: idx, gap: true, curv: 0 });
+        line.push({ pos: p, t: pl.f, u: [0, 1, 0], r: pl.r, surf: 'air', d: dist, piece: idx, gap: true, curv: 0, vcurv: 0 });
       }
       grow(vaddScaled(a, [0, 1, 0], -1)); grow(vaddScaled(b, [0, 1, 0], 8));
       grow(vaddScaled(a, pl.r, ROAD_HALF)); grow(vaddScaled(b, pl.r, -ROAD_HALF));
@@ -176,25 +182,34 @@ export function buildTrack(track, opts = {}) {
         }
         if (line.length) dist += vlen(vsub(S.pts[i], line[line.length - 1].pos));
         // lateral curvature (in the road plane) for speed planning
-        let curv = 0;
+        // curv: turning within the road plane (right positive); vcurv: bending
+        // toward the road's normal (positive in dips and loops, negative on crests)
+        let curv = 0, vcurv = 0;
         if (i > 0 && i < n - 1) {
           const ds = dloc[i + 1] - dloc[i - 1];
           const dT = vsub(S.tans[i + 1], S.tans[i - 1]);
           curv = ds > 1e-6 ? vdot(dT, S.rights[i]) / ds : 0;
+          vcurv = ds > 1e-6 ? vdot(dT, S.ups[i]) / ds : 0;
         }
-        line.push({ pos: S.pts[i], t: S.tans[i], u: S.ups[i], r: S.rights[i], surf: S.surfAt(S.us[i]), d: dist, piece: idx, curv });
+        line.push({ pos: S.pts[i], t: S.tans[i], u: S.ups[i], r: S.rights[i], surf: S.surfAt(S.us[i]), d: dist, piece: idx, curv, vcurv });
       }
 
       for (let i = 0; i < n - 1; i++) {
         const um = (S.us[i] + S.us[i + 1]) / 2;
         const surf = S.surfAt(um);
         const up = vnorm(vadd(S.ups[i], S.ups[i + 1]));
-        // road top (collision + render)
-        addColTri(L[i], R[i], R[i + 1], up, surf, 0);
-        addColTri(L[i], R[i + 1], L[i + 1], up, surf, 0);
+        // road top (collision + render), split into columns where the road twists
         const v0 = dloc[i] / 16, v1 = dloc[i + 1] / 16;
         const col = tint(SURF_COLORS[surf] || SURF_COLORS.road, idx);
-        pushQuad(surface, L[i], R[i], R[i + 1], L[i + 1], col, [[0, v0], [1, v0], [1, v1], [0, v1]]);
+        const cols = path.cols || 1;
+        for (let k = 0; k < cols; k++) {
+          const a0 = k / cols, a1 = (k + 1) / cols;
+          const A = vadd(L[i], vscale(vsub(R[i], L[i]), a0)), B = vadd(L[i], vscale(vsub(R[i], L[i]), a1));
+          const C = vadd(L[i + 1], vscale(vsub(R[i + 1], L[i + 1]), a1)), D = vadd(L[i + 1], vscale(vsub(R[i + 1], L[i + 1]), a0));
+          addColTri(A, B, C, up, surf, 0);
+          addColTri(A, C, D, up, surf, 0);
+          pushQuad(surface, A, B, C, D, col, [[a0, v0], [a1, v0], [a1, v1], [a0, v1]]);
+        }
         // underside slab
         const dn0 = vscale(S.ups[i], -SLAB), dn1 = vscale(S.ups[i + 1], -SLAB);
         const Lb0 = vadd(L[i], dn0), Lb1 = vadd(L[i + 1], dn1), Rb0 = vadd(R[i], dn0), Rb1 = vadd(R[i + 1], dn1);
