@@ -160,6 +160,7 @@ export class Car {
     this.hitTmp = {};
     this.wallHit = 0;
     this.scrape = 0;
+    this.hitAt = [0, 0, 0];  // last body contact point, for sparks
     this.surfaceName = 'road';
     this.tyreSlip = 0;       // largest normalised combined slip, for sound
     this.frozen = false;
@@ -307,7 +308,7 @@ export class Car {
       if (hit && hit.t <= RAY) {
         const x = RAY - hit.t;
         corner.push({ i, mount, x, n: hit.n, surf: hit.surf, kind: hit.kind, at: vaddScaled3(mount, down, hit.t) });
-        wd.contact = true; wd.comp = x; wd.surf = hit.surf; wd.n = hit.n; wd.kind = hit.kind;
+        wd.contact = true; wd.comp = x; wd.surf = hit.surf; wd.n = hit.n; wd.kind = hit.kind; wd.at = corner[i].at;
         grounded++;
       } else {
         wd.contact = false; wd.comp = 0; wd.fz = 0;
@@ -561,8 +562,9 @@ export class Car {
             const jt = Math.min(vtl * this.effMass(at, tdir), mu * jn);
             this.applyImpulse(vscale(tdir, -jt), at);
           }
-          if (wall && -vn > 3) this.wallHit = Math.min(1, -vn / 25);
+          if (wall && -vn > 3) this.wallHit = Math.max(this.wallHit, Math.min(1, -vn / 25));
           if (!wall) this.scrape = 1;
+          this.hitAt = at;
         }
       }
     }

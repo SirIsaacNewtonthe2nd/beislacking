@@ -41,4 +41,24 @@ export const CAMPAIGN = [
     start: { i: 20, j: 20, k: 1, h: 0 },
     pieces: 'START S S S R2 S S CP S R2 S S S S S R2 S S CP S R2 S',
   },
+  {
+    id: '09', name: 'Afterburner', tier: 'Medium', author: 26.951,
+    start: { i: 32, j: 4, k: 0, h: 0 },
+    pieces: 'START S T S K G S S S R2 S T2 S S R3 CP S L2 S K G S S S L2 T S S R1 CP S S T S FIN',
+  },
+  {
+    id: '10', name: 'Double Loop', tier: 'Hard', author: 23.452,
+    start: { i: 30, j: 4, k: 1, h: 0 },
+    pieces: 'START S T S LOOPR S CP S R2 S WL S S T S LOOPL S CP BR3 S T S K G S S S S L2 S FIN',
+  },
+  {
+    id: '11', name: 'Sky Garden', tier: 'Hard', author: 30.25,
+    start: { i: 8, j: 36, k: 5, h: 2 },
+    pieces: 'START S T2 D2 S R2 S K G RING S S S CP L2 D1 S WR S S T S L1 S K2 G G DN S S S CP R2 S FIN',
+  },
+  {
+    id: '12', name: 'Turbo Ring', tier: 'Hard', laps: 2, author: 47.56,
+    start: { i: 24, j: 8, k: 1, h: 0 },
+    pieces: 'START S T S K G S S S BR2 S CP S S T S BR2 S S LOOPR S S S S S S S BR2 S CP S S S BR2 S',
+  },
 ];

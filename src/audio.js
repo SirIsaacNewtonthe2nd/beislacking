@@ -1,5 +1,6 @@
 // Tiny synthesized sound: engine tone from the real engine speed, tyre squeal
-// from tyre slip, plus checkpoint / finish chimes.
+// from tyre slip, wind and scraping, one-shots for boosts, landings and
+// crashes, plus checkpoint / finish chimes.
 
 export class Sound {
   constructor() {
@@ -48,6 +49,22 @@ export class Sound {
     this.squeal.gain.value = 0;
     noise.connect(band).connect(this.squeal).connect(this.master);
     noise.start();
+    this.noiseBuf = buf;
+    // wind: low-passed noise that opens up with speed
+    this.windFilter = ctx.createBiquadFilter();
+    this.windFilter.type = 'lowpass';
+    this.windFilter.frequency.value = 300;
+    this.wind = ctx.createGain();
+    this.wind.gain.value = 0;
+    noise.connect(this.windFilter).connect(this.wind).connect(this.master);
+    // scraping: bright band of the same noise
+    const scr = ctx.createBiquadFilter();
+    scr.type = 'bandpass';
+    scr.frequency.value = 3200;
+    scr.Q.value = 1.5;
+    this.scrapeGain = ctx.createGain();
+    this.scrapeGain.gain.value = 0;
+    noise.connect(scr).connect(this.scrapeGain).connect(this.master);
   }
 
   setMuted(m) {
@@ -66,6 +83,68 @@ export class Sound {
     this.engineGain.gain.setTargetAtTime(active ? 0.1 + throttle * 0.12 : 0, t, 0.06);
     const sq = active && speed > 3 ? Math.min(0.22, Math.max(0, slip - 1.05) * 0.25) : 0;
     this.squeal.gain.setTargetAtTime(sq, t, 0.05);
+  }
+
+  ambient(speed, scrape, active) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const k = active ? Math.min(1, speed / 110) : 0;
+    this.wind.gain.setTargetAtTime(k * k * 0.16, t, 0.15);
+    this.windFilter.frequency.setTargetAtTime(250 + speed * 14, t, 0.15);
+    this.scrapeGain.gain.setTargetAtTime(active && speed > 4 ? scrape * 0.12 : 0, t, 0.04);
+  }
+
+  // a burst of filtered noise with a sweeping centre frequency
+  noiseHit(f0, f1, dur, vol, type = 'bandpass', q = 1) {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuf;
+    const fl = ctx.createBiquadFilter();
+    fl.type = type;
+    fl.Q.value = q;
+    fl.frequency.setValueAtTime(f0, t0);
+    fl.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + Math.min(0.04, dur * 0.2));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(fl).connect(g).connect(this.master);
+    src.start(t0, Math.random() * 0.5);
+    src.stop(t0 + dur + 0.05);
+  }
+
+  tone(f0, f1, dur, vol, type = 'sine') {
+    if (!this.ctx) return;
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    o.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(this.master);
+    o.start(t0);
+    o.stop(t0 + dur + 0.02);
+  }
+
+  boost(big) {
+    this.noiseHit(400, big ? 3800 : 2600, 0.7, 0.35, 'bandpass', 2);
+    this.tone(180, big ? 520 : 380, 0.5, 0.12, 'sawtooth');
+  }
+  land(k) {
+    this.tone(110, 38, 0.28, 0.25 + 0.3 * k);
+    this.noiseHit(900, 120, 0.25, 0.15 + 0.3 * k, 'lowpass');
+  }
+  crash(k) {
+    this.noiseHit(2200, 300, 0.35, 0.2 + 0.45 * k, 'lowpass');
+    this.tone(240, 90, 0.18, 0.08 + 0.12 * k, 'square');
+  }
+  medal(rank) {
+    // rank 0 = author .. 3 = bronze: better medals get a longer run up
+    const notes = [523, 659, 784, 1046, 1318].slice(0, 5 - rank);
+    this.beep(notes, 0.14, 'triangle', 0.26);
   }
 
   beep(freqs, dur = 0.12, type = 'sine', vol = 0.25) {

@@ -45,12 +45,14 @@ export class Bot {
     // in the air: steering does nothing; use throttle and brake to pitch the
     // car parallel to whatever it will land on
     if (!car.grounded && car.airTime > 0.05) {
+      // a car resting on its back or side reads as airborne; give up on it
+      this.stuck = sp < 1 ? this.stuck + dt : 0;
       const hit = car.world.raycast(car.p, [0, -1, 0], 150, {});
       const n = hit && hit.n[1] > 0.3 ? hit.n : [0, 1, 0];
       const noseUp = vdot(f, n);
       const pitchRate = vdot(car.w, r);
       const cmd = noseUp * 4 + pitchRate * 0.8;
-      return { steer: 0, throttle: cmd < -0.05 ? clamp(-cmd * 3, 0, 1) : 0, brake: cmd > 0.05 ? clamp(cmd * 3, 0, 1) : 0, analog: true, assists: true, wantRespawn: false };
+      return { steer: 0, throttle: cmd < -0.05 ? clamp(-cmd * 3, 0, 1) : 0, brake: cmd > 0.05 ? clamp(cmd * 3, 0, 1) : 0, analog: true, assists: true, wantRespawn: this.stuck > 2 };
     }
 
     // steering: follow the line's heading and close the sideways gap, all

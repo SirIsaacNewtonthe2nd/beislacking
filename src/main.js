@@ -10,6 +10,7 @@ import { Sound } from './audio.js';
 import { Bot } from './bot.js';
 import { CAMPAIGN } from './tracks.js';
 import { Editor } from './editor.js';
+import { randomTrack } from './generator.js';
 import * as store from './storage.js';
 import { fmtTime, medalsFor, medalOf, trackKey } from './storage.js';
 import { qslerp, vlerp } from './math.js';
@@ -64,7 +65,7 @@ function makeSession(track, meta, bot = false) {
   if (!bot) {
     meta.key = meta.key || trackKey(track);
     if (meta.kind !== 'campaign') meta.medals = userMedals(track);
-    s.pb = store.getPB(meta.key);
+    s.pb = loadPB(meta);
   }
   race.on((ev) => onRaceEvent(s, ev));
   return s;
@@ -89,7 +90,7 @@ function retry() {
   const s = app.session;
   if (!s) return;
   hideOverlay();
-  s.pb = store.getPB(s.meta.key);
+  s.pb = loadPB(s.meta);
   if (s.meta.kind === 'test') s.meta.medals = userMedals(editor.track);
   renderTargets(s);
   s.race.reset();
@@ -130,7 +131,7 @@ function onFinish(s, ev) {
     s.meta.medals = userMedals(editor.track);
     note = `Author time set to ${fmtTime(ev.time)}. Save the track to keep it.`;
   }
-  if (improved) store.setPB(s.meta.key, { time: ev.time, cps: ev.cpTimes, ghost: s.race.ghost, date: Date.now() });
+  if (improved) savePB(s.meta, { time: ev.time, cps: ev.cpTimes, ghost: s.race.ghost, date: Date.now() });
   const delta = prev ? ev.time - prev.time : null;
   s.split = { delta: delta, time: ev.time, until: performance.now() + 4000 };
   setTimeout(() => {
@@ -149,6 +150,10 @@ function showFinish(s, ev, prev, note) {
   else if (ev.time < prev.time) { d.className = 'delta ahead'; d.textContent = `${fmtTime(ev.time - prev.time, true)} · new best`; }
   else { d.className = 'delta behind'; d.textContent = `${fmtTime(ev.time - prev.time, true)} vs best ${fmtTime(prev.time)}`; }
   const got = medalOf(ev.time, m);
+  const was = medalOf(prev && prev.time, m);
+  const better = got && (!was || MEDALS.indexOf(got) < MEDALS.indexOf(was));
+  if (better) { sound.medal(MEDALS.indexOf(got)); confetti(got, 110); }
+  else if (prev && ev.time < prev.time) confetti(null, 40);
   $('fin-earned').innerHTML = got ? `<i class="medal ${got}"></i>${MEDAL_NAME[got]} medal` : m ? '<i class="medal none"></i>No medal this run' : '';
   const bestMedal = medalOf(best, m);
   $('fin-medals').innerHTML = m ? MEDALS.map((k) => {
@@ -157,11 +162,35 @@ function showFinish(s, ev, prev, note) {
   }).join('') : '';
   const resp = ev.respawns ? `${ev.respawns} respawn${ev.respawns > 1 ? 's' : ''}. ` : '';
   $('fin-note').textContent = resp + (note || (!m && s.meta.kind !== 'campaign' ? 'This track has no author time yet. Validate it from the editor.' : ''));
-  const hasNext = s.meta.kind === 'campaign' && s.meta.index < CAMPAIGN.length - 1;
+  const random = s.meta.kind === 'random';
+  const hasNext = random || (s.meta.kind === 'campaign' && s.meta.index < CAMPAIGN.length - 1);
   $('btn-next').hidden = !hasNext;
+  $('btn-next').textContent = random ? 'New random track' : 'Next track';
+  $('btn-save-random').hidden = !random;
+  $('btn-save-random').textContent = s.meta.saved ? 'Saved' : 'Save track';
+  $('btn-save-random').disabled = !!s.meta.saved;
   $('btn-fin-exit').textContent = s.meta.kind === 'test' ? 'Back to editor' : 'Menu';
   showOverlay('finish');
   $('btn-retry').focus({ preventScroll: true });
+}
+
+function confetti(medal, count) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const box = $('confetti');
+  box.textContent = '';
+  const colors = medal ? [`var(--${medal})`, 'var(--accent)', '#ffffff', `var(--${medal})`] : ['var(--ahead)', '#ffffff', 'var(--accent)'];
+  for (let i = 0; i < count; i++) {
+    const c = document.createElement('i');
+    c.style.left = Math.random() * 100 + '%';
+    c.style.background = colors[i % colors.length];
+    c.style.animationDuration = 1.6 + Math.random() * 1.6 + 's';
+    c.style.animationDelay = Math.random() * 0.4 + 's';
+    c.style.setProperty('--dx', (Math.random() - 0.5) * 220 + 'px');
+    c.style.setProperty('--rot', (Math.random() - 0.5) * 1440 + 'deg');
+    box.appendChild(c);
+  }
+  clearTimeout(confetti.timer);
+  confetti.timer = setTimeout(() => { box.textContent = ''; }, 3800);
 }
 
 // ---------------------------------------------------------------- attract mode (bot laps behind the menu)
@@ -203,6 +232,10 @@ function drawSession(s, dt, camMode) {
   const p = vlerp(s.prevP, car.p, a);
   const q = qslerp(s.prevQ, car.q, a);
   R.updateCar(p, q, car, s.world);
+  const ev = R.fx.update(dt, car, s.snap);
+  if (ev.landed) R.kick(0.25 + 0.6 * ev.landed);
+  if (ev.wallHit) R.kick(0.25 + ev.wallHit);
+  if (!s.bot) onEffects(s, ev);
   const ghost = !s.bot && settings.ghost && s.pb && s.pb.ghost && race.phase !== 'finished' ? ghostAt(s.pb.ghost, race.phase === 'countdown' ? 0 : race.time + a * DT) : null;
   R.updateGhost(ghost);
   let up = [0, 0, 0];
@@ -210,9 +243,16 @@ function drawSession(s, dt, camMode) {
   if (!car.grounded) up = [0, 1, 0];
   const saved = R.camMode;
   if (camMode != null) R.camMode = camMode;
-  R.updateCamera(p, q, car.v, dt, s.snap, up);
+  R.updateCamera(p, q, car.v, dt, s.snap, up, car.boost > 0);
   R.camMode = saved;
   s.snap = false;
+}
+
+function onEffects(s, ev) {
+  if (ev.boostStart) sound.boost(s.race.car.boostForce > 9000);
+  if (ev.landed) sound.land(ev.landed);
+  if (ev.wallHit) sound.crash(ev.wallHit);
+  if (ev.air > 1 && s.race.phase === 'running') s.stunt = { text: `Air ${ev.air.toFixed(1)} s`, until: performance.now() + 1500 };
 }
 
 function updateHUD(s, inp) {
@@ -255,7 +295,13 @@ function updateHUD(s, inp) {
   if (fx.innerHTML !== fxHtml) fx.innerHTML = fxHtml;
   const bn = $('banner');
   if (s.banner && now < s.banner.until) { bn.hidden = false; bn.textContent = s.banner.text; } else bn.hidden = true;
-  sound.engine(car.rpm, inp.throttle, race.phase === 'running' && !app.paused, car.grounded ? car.tyreSlip : 0, car.speed);
+  const st = $('stunt');
+  if (s.stunt && now < s.stunt.until) {
+    if (st.hidden || st.textContent !== s.stunt.text) { st.textContent = s.stunt.text; st.hidden = false; st.classList.remove('pop'); void st.offsetWidth; st.classList.add('pop'); }
+  } else st.hidden = true;
+  const active = race.phase === 'running' && !app.paused;
+  sound.engine(car.rpm, inp.throttle, active, car.grounded ? car.tyreSlip : 0, car.speed);
+  sound.ambient(car.speed, car.scrape, active);
 }
 
 let last = performance.now();
@@ -333,16 +379,17 @@ function exitRace() {
   app.paused = false;
   hideAll();
   sound.engine(0, 0, false);
+  sound.ambient(0, 0, false);
   if (s && s.meta.kind === 'test') { app.mode = 'editor'; editor.resume(); }
   else showMenu();
 }
 
 function showOverlay(id) {
-  for (const o of ['pause', 'finish', 'controls', 'codebox']) $(o).hidden = o !== id;
+  for (const o of ['pause', 'finish', 'controls', 'codebox', 'building']) $(o).hidden = o !== id;
   app.overlay = id;
 }
 function hideOverlay() {
-  for (const o of ['pause', 'finish', 'controls', 'codebox']) $(o).hidden = true;
+  for (const o of ['pause', 'finish', 'controls', 'codebox', 'building']) $(o).hidden = true;
   app.overlay = null;
 }
 function hideAll() {
@@ -450,9 +497,85 @@ $('btn-retry').onclick = () => retry();
 $('btn-fin-exit').onclick = () => exitRace();
 $('btn-next').onclick = () => {
   const s = app.session;
+  if (s && s.meta.kind === 'random') { playRandom(); return; }
   if (!s || s.meta.kind !== 'campaign') return;
   const i = s.meta.index + 1;
   if (i < CAMPAIGN.length) startRace(campaignTrack(i), campaignMeta(i));
+};
+
+// ---------------------------------------------------------------- personal bests
+// Random tracks keep their records in memory until saved, so playing lots of
+// them doesn't fill the browser's storage.
+function loadPB(meta) {
+  return meta.kind === 'random' && !meta.saved ? meta.pb || null : store.getPB(meta.key);
+}
+function savePB(meta, rec) {
+  if (meta.kind === 'random' && !meta.saved) meta.pb = rec;
+  else store.setPB(meta.key, rec);
+}
+
+// ---------------------------------------------------------------- random tracks
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+// Drives a track with the bot without drawing it; resolves to the finish
+// time of a clean run (no respawns), or null.
+async function botTime(track, margin, onProgress) {
+  const built = buildTrack(track);
+  const race = new Race(built, new World(built.tris));
+  const bot = new Bot(built, { margin });
+  let ticks = 0;
+  while (race.phase !== 'finished' && ticks < 120 / DT) {
+    const end = performance.now() + 12;
+    while (race.phase !== 'finished' && ticks < 120 / DT && performance.now() < end) {
+      const inp = bot.input(race.car, DT);
+      if (inp.wantRespawn) { race.respawn(); bot.stuck = 0; }
+      race.tick(inp);
+      ticks++;
+      if (race.respawns) return null;
+    }
+    onProgress(bot.idx / built.line.length);
+    await tick();
+  }
+  return race.finishTime;
+}
+
+let building = false;
+async function playRandom() {
+  if (building) return;
+  building = true;
+  showOverlay('building');
+  const bar = $('building-bar');
+  bar.style.width = '0%';
+  try {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const def = randomTrack((Math.random() * 2 ** 31) >>> 0);
+      if (!def) continue;
+      const t = parseTrack(def);
+      const first = await botTime(t, 0.66, (f) => { bar.style.width = (f * 55).toFixed(1) + '%'; });
+      if (!first) continue;
+      // a bolder second run usually sets a quicker author time
+      const bold = await botTime(t, 0.78, (f) => { bar.style.width = (55 + f * 45).toFixed(1) + '%'; });
+      t.medals = { author: bold ? Math.min(first, bold) : first, key: trackKey(t) };
+      startRace(t, { kind: 'random', name: t.name, code: 'Random' });
+      return;
+    }
+    hideOverlay();
+  } finally {
+    building = false;
+  }
+}
+
+$('btn-random').onclick = () => playRandom();
+$('btn-save-random').onclick = () => {
+  const s = app.session;
+  if (!s || s.meta.kind !== 'random' || s.meta.saved) return;
+  const list = store.getUserTracks();
+  list.push({ id: 'u' + Date.now().toString(36), name: s.track.name, track: serializeTrack(s.track), saved: Date.now() });
+  if (!store.setUserTracks(list)) { $('fin-note').textContent = 'Could not save: this browser is blocking storage.'; return; }
+  if (s.meta.pb) store.setPB(s.meta.key, s.meta.pb);
+  s.meta.saved = true;
+  $('btn-save-random').textContent = 'Saved';
+  $('btn-save-random').disabled = true;
 };
 
 // ---------------------------------------------------------------- share codes

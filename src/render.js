@@ -4,6 +4,7 @@
 import { GRID, BLOCK } from './pieces.js';
 import { FLOOR_Y } from './collision.js';
 import { WHEEL_RADIUS, WHEELS, REST } from './car.js';
+import { Effects } from './fx.js';
 
 const SKY = 0x9fc6e8;
 
@@ -178,6 +179,11 @@ export class Renderer {
     this.shadow = shadow;
     this.scene.add(shadow);
 
+    this.scene.add(this.camera); // speed lines hang off the camera
+    this.fx = new Effects(this.scene, this.camera, this.car);
+    this.shake = 0;
+    this.boostFov = 0;
+
     this.camMode = 0;
     this.camPos = new THREE.Vector3();
     this.camUp = new THREE.Vector3(0, 1, 0);
@@ -200,6 +206,7 @@ export class Renderer {
     if (surface.pos.length) this.trackGroup.add(new THREE.Mesh(bufferGeometry(surface), this.roadMat));
     if (solid.pos.length) this.trackGroup.add(new THREE.Mesh(bufferGeometry(solid), this.solidMat));
     if (decal.pos.length) this.trackGroup.add(new THREE.Mesh(bufferGeometry(decal), this.decalMat));
+    this.fx.clear();
     this.camInit = false;
   }
 
@@ -237,9 +244,12 @@ export class Renderer {
     this.ghost.quaternion.set(state.q[0], state.q[1], state.q[2], state.q[3]);
   }
 
+  // a jolt for landings and crashes, 0..1
+  kick(amount) { this.shake = Math.min(1, Math.max(this.shake, amount)); }
+
   // Chase cameras. mode 0: chase, 1: far chase, 2: bumper
   // groundUp: the road normal under the car, or world up when airborne
-  updateCamera(p, q, v, dt, snap = false, groundUp = [0, 1, 0]) {
+  updateCamera(p, q, v, dt, snap = false, groundUp = [0, 1, 0], boost = false) {
     const quat = new THREE.Quaternion(q[0], q[1], q[2], q[3]);
     const F = new THREE.Vector3(0, 0, 1).applyQuaternion(quat);
     const U = new THREE.Vector3(groundUp[0], groundUp[1], groundUp[2]).normalize();
@@ -269,7 +279,18 @@ export class Renderer {
     this.camera.position.copy(this.camPos);
     this.camera.up.copy(this.camUp);
     this.camera.lookAt(pos.clone().addScaledVector(this.camFwd, m.look).addScaledVector(this.camUp, m.lookUp));
-    const fov = m.fov + Math.min(16, speed * 0.07);
+    // shake: a quick decaying jolt, plus a faint buzz at very high speed
+    if (snap) this.shake = 0;
+    const buzz = Math.max(0, speed - 70) * 0.0006;
+    const amp = this.shake * 0.35 + buzz;
+    if (amp > 1e-4) {
+      this.camera.position.x += (Math.random() - 0.5) * amp;
+      this.camera.position.y += (Math.random() - 0.5) * amp;
+      this.camera.position.z += (Math.random() - 0.5) * amp;
+    }
+    this.shake *= Math.exp(-dt * 7);
+    this.boostFov += ((boost ? 1 : 0) - this.boostFov) * Math.min(1, dt * (boost ? 6 : 2));
+    const fov = m.fov + Math.min(16, speed * 0.07) + this.boostFov * 9;
     if (Math.abs(this.camera.fov - fov) > 0.05) { this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 3); this.camera.updateProjectionMatrix(); }
     this.car.visible = this.camMode !== 2;
   }

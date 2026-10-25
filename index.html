@@ -76,6 +76,12 @@ button { font: inherit; color: inherit; }
 kbd { font: 600 11px/1 var(--body); padding: 2px 5px; border-radius: 3px; border: 1px solid rgba(255,255,255,.3); background: rgba(0,0,0,.35); }
 #countdown { position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%); font: 800 clamp(70px, 14vw, 140px)/1 var(--display); text-shadow: 0 4px 16px rgba(0,0,0,.35); pointer-events: none; }
 #countdown.go { color: var(--accent); }
+#stunt { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); font: 800 30px/1 var(--display); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); text-shadow: 0 2px 8px rgba(0,0,0,.45); pointer-events: none; white-space: nowrap; }
+#stunt.pop { animation: pop .35s cubic-bezier(.2,1.6,.4,1); }
+@keyframes pop { from { transform: translateX(-50%) scale(.4); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+#confetti { position: absolute; inset: 0; overflow: hidden; pointer-events: none; padding: 0; }
+#confetti i { position: absolute; top: -12px; width: 8px; height: 13px; border-radius: 2px; animation: fall linear forwards; }
+@keyframes fall { to { transform: translate(var(--dx), 105vh) rotate(var(--rot)); } }
 #banner { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); font: 700 22px/1 var(--display); letter-spacing: .1em; text-transform: uppercase; padding: 8px 16px; border-radius: 4px; background: var(--panel); pointer-events: none; white-space: nowrap; }
 
 /* ---------- panels ---------- */
@@ -130,6 +136,8 @@ h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
 .overlay { display: grid; place-items: center; background: rgba(6,10,16,.45); pointer-events: auto; overflow-y: auto; }
 .dialog { width: min(440px, 100%); padding: 22px; display: grid; gap: 16px; }
 .dialog h2 { font-size: 30px; text-transform: uppercase; letter-spacing: .04em; }
+.progress { height: 6px; border-radius: 3px; background: rgba(255,255,255,.1); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
 .dialog .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .dialog .actions .btn { flex: 1 1 auto; }
 #finish .time { font: 800 64px/1 var(--display); font-variant-numeric: tabular-nums; }
@@ -209,6 +217,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
   </div>
   <div id="countdown" hidden></div>
   <div id="banner" hidden></div>
+  <div id="stunt" hidden></div>
   <div class="bottom">
     <div id="effects" hidden></div>
     <div id="split" hidden></div>
@@ -237,9 +246,10 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
       <div class="brand">
         <div class="eyebrow">Time trial · block tracks</div>
         <h1>Grid<em>run</em></h1>
-        <p>Set the fastest time you can. Every track has four medals to chase, and your best run comes back as a ghost.</p>
+        <p>Set the fastest time you can. Every track has four medals to chase, and your best run comes back as a ghost. Random track builds a new one each time.</p>
       </div>
-      <button class="btn primary" id="btn-new">Build a track</button>
+      <button class="btn primary" id="btn-random">Random track</button>
+      <button class="btn" id="btn-new">Build a track</button>
       <button class="btn" id="btn-import">Import a track code</button>
       <button class="btn" id="btn-controls">Controls</button>
       <div class="settings panel">
@@ -275,6 +285,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
 </div>
 
 <div id="finish" class="layer overlay" hidden>
+  <div id="confetti" aria-hidden="true"></div>
   <div class="dialog panel">
     <div class="eyebrow" id="fin-track"></div>
     <div>
@@ -287,6 +298,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
     <div class="actions">
       <button class="btn primary" id="btn-retry">Retry</button>
       <button class="btn" id="btn-next">Next track</button>
+      <button class="btn" id="btn-save-random" hidden>Save track</button>
       <button class="btn" id="btn-fin-exit">Menu</button>
     </div>
   </div>
@@ -308,6 +320,14 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
     </dl>
     <p class="note">The car is a 700 kg, ~900 kW open-wheeler with sticky tyres, weight transfer, big downforce and a 7-speed automatic. Brake before corners, not in them. Driving aids (ABS, traction and stability control, speed-sensitive steering) are on by default; turn them off in the menu for a raw car that locks wheels and spins if you're rough. Dirt slides, ice barely grips, grass is slow. Yellow and red pads push the car forward. Black pads cut the engine and purple pads lock the steering for 4 seconds; green pads cancel both.</p>
     <div class="actions"><button class="btn primary" id="btn-controls-close">Got it</button></div>
+  </div>
+</div>
+
+<div id="building" class="layer overlay" hidden>
+  <div class="dialog panel">
+    <h2>Building a track</h2>
+    <p class="note" id="building-note">Laying pieces, then a test driver sets the author time.</p>
+    <div class="progress"><i id="building-bar"></i></div>
   </div>
 </div>
 

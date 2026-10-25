@@ -37,7 +37,7 @@ export function simulate(def, { log = false, maxTime = 240, margin } = {}) {
   return { time: race.finishTime, respawns: race.respawns, top: race.topSpeed * 3.6, events, cps: race.cps.length, tris: built.tris.length };
 }
 
-if (process.argv[1].endsWith('sim.mjs')) {
+if ((process.argv[1] || '').endsWith('sim.mjs')) {
   const times = {};
   for (const def of CAMPAIGN) {
     if (only && def.id !== only) continue;

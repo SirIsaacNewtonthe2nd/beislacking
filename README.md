@@ -1,6 +1,6 @@
 # Gridrun
 
-A browser time-trial racer built around block tracks and arcade driving physics. Race eight campaign tracks for medals, chase your own ghost, and build your own tracks in the editor.
+A browser time-trial racer built around block tracks and arcade driving physics. Race twelve campaign tracks for medals, play endless random tracks, chase your own ghost, and build your own tracks in the editor.
 
 ## Play
 
@@ -53,6 +53,8 @@ Gamepads work too: the stick steers, RT/A accelerates, LT/X brakes, B respawns. 
 - **Surfaces:** road, dirt (slides), ice (barely grips), grass (slow).
 - **Effect pads:** engine off, no steering, and reset.
 - **Pieces:** straights; tight, medium and wide turns; banked turns (they tilt about the centre line, so they need a level of height beneath them) and wall turns; slopes; jump ramps with a straight lip; gaps; air checkpoints; and a loop with clothoid entry and exit. The editor also has raise/lower tools to change the height of the next piece.
+- **Random tracks:** the menu's Random track button lays out a new track (jumps, loops, turbos, banked and wall turns), has the bot drive it to set the author time, and starts the race. Save the ones you like to My tracks. `tools/gen.mjs` checks how often generated tracks can be finished.
+- **Feel:** skid marks, tyre smoke and dust, sparks off walls, a boost flame with a wider view, speed lines, camera shake on landings and crashes, air-time callouts, confetti for new medals, and sounds for wind, boosts, landings, crashes and scraping.
 - **Racing:** a countdown, a timer to the millisecond, checkpoint splits against your best run, multi-lap circuits, respawns, ghosts, and author/gold/silver/bronze medals.
 - **Editor:** chain pieces from a start block, insert after any piece, change surfaces and borders, undo, and test drive. Your test-drive finish sets the author time. You can save tracks to the browser or share them as a code.
 
@@ -68,12 +70,15 @@ src/car.js        car physics: suspension, tyres, powertrain, aero, driver aids
 src/race.js       timer, checkpoints, laps, respawn, ghost recording
 src/bot.js        centreline driver used for testing and medal times (plans speeds from friction, load and downforce)
 src/render.js     three.js scene, car model, cameras
+src/fx.js         skid marks, smoke, sparks, boost flame, speed lines
+src/generator.js  random track generator
 src/editor.js     track editor
 src/main.js       app flow, HUD, finish screen
 src/tracks.js     campaign tracks
 tools/sim.mjs     headless bot run of every campaign track (`--write` stores author times)
 tools/map.mjs     ASCII map of a track layout, to spot overlaps
 tools/handling.mjs  skid-pad stability check and setup search
+tools/gen.mjs     generates random tracks and drives them with the bot
 vendor/           three.js r128 (MIT)
 ```
 
