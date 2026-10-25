@@ -174,6 +174,14 @@ export class Renderer {
     this.ghost = buildCarModel(0xbfe3ff, true);
     this.ghost.visible = false;
     this.scene.add(this.ghost);
+    // the AI's best run: a purple ghost and the line it drove
+    this.aiGhost = buildCarModel(0xa77bff, true);
+    this.aiGhost.visible = false;
+    this.scene.add(this.aiGhost);
+    this.aiLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9 }));
+    this.aiLine.frustumCulled = false;
+    this.aiLine.visible = false;
+    this.scene.add(this.aiLine);
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.9, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
     shadow.scale.set(0.75, 1.2, 1);
     this.shadow = shadow;
@@ -207,6 +215,8 @@ export class Renderer {
     if (solid.pos.length) this.trackGroup.add(new THREE.Mesh(bufferGeometry(solid), this.solidMat));
     if (decal.pos.length) this.trackGroup.add(new THREE.Mesh(bufferGeometry(decal), this.decalMat));
     this.fx.clear();
+    this.setAILine(null);
+    this.aiGhost.visible = false;
     this.camInit = false;
   }
 
@@ -237,11 +247,38 @@ export class Renderer {
     } else this.shadow.visible = false;
   }
 
-  updateGhost(state) {
-    if (!state) { this.ghost.visible = false; return; }
-    this.ghost.visible = true;
-    this.ghost.position.set(state.p[0], state.p[1], state.p[2]);
-    this.ghost.quaternion.set(state.q[0], state.q[1], state.q[2], state.q[3]);
+  updateGhost(state, model = this.ghost) {
+    if (!state) { model.visible = false; return; }
+    model.visible = true;
+    model.position.set(state.p[0], state.p[1], state.p[2]);
+    model.quaternion.set(state.q[0], state.q[1], state.q[2], state.q[3]);
+  }
+
+  // The route of a recorded run, just above the road, coloured by speed
+  // (blue slow, yellow, red fast). Pass null to hide it.
+  setAILine(samples) {
+    const geo = this.aiLine.geometry;
+    if (!samples || samples.length < 16) { this.aiLine.visible = false; return; }
+    const n = samples.length / 8, pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+    const q = new THREE.Quaternion(), up = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const o = i * 8;
+      q.set(samples[o + 4], samples[o + 5], samples[o + 6], samples[o + 7]);
+      up.set(0, 1, 0).applyQuaternion(q);
+      pos[i * 3] = samples[o + 1] - up.x * 0.22; pos[i * 3 + 1] = samples[o + 2] - up.y * 0.22; pos[i * 3 + 2] = samples[o + 3] - up.z * 0.22;
+      const j = Math.min(n - 1, i + 1) * 8, k = Math.max(0, i - 1) * 8;
+      const dt = samples[j] - samples[k] || 1;
+      const v = Math.hypot(samples[j + 1] - samples[k + 1], samples[j + 2] - samples[k + 2], samples[j + 3] - samples[k + 3]) / dt;
+      const t = Math.min(1, v / 85);
+      col[i * 3] = t < 0.5 ? 0.25 + t * 1.5 : 1;
+      col[i * 3 + 1] = t < 0.5 ? 0.55 + t * 0.7 : 0.9 - (t - 0.5) * 1.5;
+      col[i * 3 + 2] = t < 0.5 ? 1 - t * 2 : 0.1;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setDrawRange(0, n);
+    geo.computeBoundingSphere();
+    this.aiLine.visible = true;
   }
 
   // a jolt for landings and crashes, 0..1

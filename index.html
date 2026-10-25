@@ -117,6 +117,25 @@ h1, h2, h3 { font-family: var(--display); margin: 0; text-wrap: balance; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
 .card { text-align: left; padding: 12px 14px; display: grid; gap: 8px; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); transition: transform .12s, border-color .12s; position: relative; }
 .card:hover { border-color: rgba(255,255,255,.35); transform: translateY(-1px); }
+.cardwrap { position: relative; display: grid; }
+.card-ai { position: absolute; right: 34px; bottom: 9px; font: 700 12px/1 var(--display); letter-spacing: .1em; padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(167,123,255,.5); background: rgba(167,123,255,.14); color: #cdb6ff; cursor: pointer; }
+.card-ai:hover { background: rgba(167,123,255,.3); }
+.medal.ai { background: #a77bff; }
+#aiview .ai-panel { position: absolute; top: max(12px, env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); width: min(340px, calc(100% - 32px)); padding: 18px; display: grid; gap: 10px; }
+#aiview .ai-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+#aiview h2 { font-size: 26px; text-transform: uppercase; letter-spacing: .04em; margin: 0; }
+#aiview .ai-status { font: 600 13px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; color: #cdb6ff; }
+#aiview .ai-time { font-size: 48px; font-weight: 800; line-height: 1; }
+#aiview .ai-compare { display: grid; gap: 4px; font: 600 15px/1.2 var(--display); }
+#aiview .ai-compare div { display: flex; align-items: center; gap: 8px; }
+#aiview .ai-compare b { color: var(--muted); font-weight: 600; flex: 1; text-transform: uppercase; letter-spacing: .06em; font-size: 13px; }
+#aiview .ai-compare .ahead { color: var(--ahead); } #aiview .ai-compare .behind { color: var(--behind); }
+#aiview .ai-chart { width: 100%; height: 64px; background: rgba(255,255,255,.04); border-radius: 4px; }
+#aiview .ai-stats { color: var(--muted); font-size: 13px; }
+#aiview .key-you { color: #bfe3ff; }
+#ai-flash { position: absolute; top: 18%; left: 50%; transform: translateX(-50%); font: 800 28px/1 var(--display); letter-spacing: .05em; text-transform: uppercase; color: #cdb6ff; text-shadow: 0 2px 8px rgba(0,0,0,.5); pointer-events: none; white-space: nowrap; }
+#ai-flash.pop { animation: pop .35s cubic-bezier(.2,1.6,.4,1); }
+@media (max-width: 640px) { #aiview .ai-panel { top: auto; bottom: max(12px, env(safe-area-inset-bottom, 0px)); } #aiview .note { display: none; } }
 .card .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .card .code { font: 800 30px/1 var(--display); color: var(--muted); }
 .card .name { font: 700 19px/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; }
@@ -271,6 +290,24 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
   </div>
 </div>
 
+<div id="aiview" class="layer" hidden>
+  <div class="ai-panel panel">
+    <div class="eyebrow" id="ai-track"></div>
+    <div class="ai-head"><h2>AI driver</h2><span class="ai-status" id="ai-status"></span></div>
+    <div class="ai-time num" id="ai-time">-:--.---</div>
+    <div class="ai-compare" id="ai-compare"></div>
+    <svg class="ai-chart" id="ai-chart" viewBox="0 0 260 64" preserveAspectRatio="none" aria-label="AI best time over attempts"></svg>
+    <div class="ai-stats" id="ai-stats"></div>
+    <div class="actions">
+      <button class="btn primary" id="ai-race">Race the AI</button>
+      <button class="btn" id="ai-toggle">Pause</button>
+      <button class="btn" id="ai-exit">Back</button>
+    </div>
+    <p class="note">Each attempt changes a stretch of its racing line or braking, drives it, and keeps the change if the lap gets faster. The purple ghost replays its best run; <span class="key-you">blue</span> is yours.</p>
+  </div>
+  <div id="ai-flash" hidden></div>
+</div>
+
 <div id="pause" class="layer overlay" hidden>
   <div class="dialog panel">
     <div class="eyebrow" id="pause-track"></div>
@@ -278,6 +315,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
     <div class="actions" style="flex-direction:column">
       <button class="btn primary" id="btn-resume">Resume</button>
       <button class="btn" id="btn-restart">Restart</button>
+      <button class="btn" id="btn-pause-ai">Watch the AI</button>
       <button class="btn" id="btn-pause-controls">Controls</button>
       <button class="btn" id="btn-exit"></button>
     </div>
@@ -299,6 +337,7 @@ textarea.code { width: 100%; min-height: 110px; resize: vertical; font: 12px/1.4
       <button class="btn primary" id="btn-retry">Retry</button>
       <button class="btn" id="btn-next">Next track</button>
       <button class="btn" id="btn-save-random" hidden>Save track</button>
+      <button class="btn" id="btn-fin-ai">Watch the AI</button>
       <button class="btn" id="btn-fin-exit">Menu</button>
     </div>
   </div>

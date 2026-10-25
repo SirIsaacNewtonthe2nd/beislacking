@@ -1,0 +1,402 @@
+// An AI driver that learns a track by trial and error.
+//
+// Its policy is a racing line (a smooth sideways offset from the centre line)
+// and a speed profile (how hard to push each stretch, on top of a planner that
+// knows the car's grip, downforce and braking). Training is an evolution
+// strategy: change a small part of the policy, drive it, keep it if the lap is
+// faster. The simulation is deterministic, so each attempt restarts from a
+// saved state just before the changed stretch, and stops early once it falls
+// behind or rejoins the best run's path.
+
+import { vsub, vdot, vdist, clamp } from './math.js';
+import { GRAVITY, DOWNFORCE_PER_MASS, DOWNFORCE_CAP, SURFACE_MU } from './car.js';
+import { ROAD_HALF } from './pieces.js';
+import { buildTrack } from './geometry.js';
+import { World } from './collision.js';
+import { Race, DT } from './race.js';
+import { rng } from './generator.js';
+
+const WHEELBASE = 2.75;
+const KNOT = 12;              // m between control points of the line and speed profile
+const SNAP_EVERY = 40;        // ticks between saved states
+
+// limits on the sideways offset, per piece type. Kickers stay on the centre
+// line so the car takes off straight and lands on the road.
+const OFFSET_LIMIT = { LOOPR: 2.5, LOOPL: 2.5, WR: 5, WL: 5, BR2: 6, BL2: 6, BR3: 6, BL3: 6, K: 0, K2: 0 };
+const ROAD_LIMIT = ROAD_HALF - 1.7;
+
+// uniform cubic B-spline basis and its first two derivatives
+function basis(t) {
+  const it = 1 - t, t2 = t * t, t3 = t2 * t;
+  return [
+    [it * it * it / 6, (3 * t3 - 6 * t2 + 4) / 6, (-3 * t3 + 3 * t2 + 3 * t + 1) / 6, t3 / 6],
+    [-it * it / 2, (3 * t2 - 4 * t) / 2, (-3 * t2 + 2 * t + 1) / 2, t2 / 2],
+    [it, 3 * t - 2, -3 * t + 1, t],
+  ];
+}
+
+export function initialPolicy(built) {
+  const n = Math.ceil(built.line[built.line.length - 1].d / KNOT) + 4;
+  return { off: new Array(n).fill(0), fac: new Array(n).fill(1), margin: 0.66, gain: 1.2, preview: 0.12 };
+}
+
+// A first racing line: treat the line as an elastic band and let it pull
+// tight between the road edges, which cuts across the inside of corners.
+export function smoothPolicy(built, pol) {
+  const L = built.line, n = L.length, nk = pol.off.length;
+  const types = built.layout.placed.map((pl) => (pl ? pl.piece.type : ''));
+  // centre line, sideways axis and offset limit at each control point
+  const C = [], R = [], lim = [];
+  let i = 0;
+  for (let k = 0; k < nk; k++) {
+    const d = (k - 1) * KNOT; // a B-spline control point sits about a knot behind its peak
+    while (i < n - 1 && L[i + 1].d < d) i++;
+    const p = L[Math.min(n - 1, i)];
+    C.push(p.pos); R.push(p.r);
+    const lineLim = p.gap ? 0 : OFFSET_LIMIT[types[p.piece]] ?? ROAD_LIMIT;
+    lim.push(d < 0 || d > L[n - 1].d ? 0 : lineLim * 0.85);
+  }
+  const off = [...pol.off];
+  for (let it = 0; it < 300; it++) {
+    for (let k = 1; k < nk - 1; k++) {
+      if (!lim[k]) { off[k] = 0; continue; }
+      const P = (j) => [C[j][0] + R[j][0] * off[j], C[j][1] + R[j][1] * off[j], C[j][2] + R[j][2] * off[j]];
+      const a = P(k - 1), b = P(k + 1), c = P(k);
+      const mid = [(a[0] + b[0]) / 2 - c[0], (a[1] + b[1]) / 2 - c[1], (a[2] + b[2]) / 2 - c[2]];
+      off[k] = clamp(off[k] + 0.8 * vdot(mid, R[k]), -lim[k], lim[k]);
+    }
+  }
+  return { ...pol, off };
+}
+
+// Turns a policy into per-line-point targets: path position, tangent,
+// curvature and planned speed.
+export function compilePolicy(built, pol) {
+  const L = built.line, n = L.length;
+  const pos = new Array(n), tan = new Array(n), curv = new Float64Array(n), off = new Float64Array(n), plan = new Float64Array(n);
+  const types = built.layout.placed.map((pl) => (pl ? pl.piece.type : ''));
+  for (let i = 0; i < n; i++) {
+    const p = L[i];
+    const u = p.d / KNOT, seg = Math.min(pol.off.length - 4, Math.floor(u));
+    const [b, b1, b2] = basis(u - seg);
+    let o = 0, o1 = 0, o2 = 0;
+    for (let k = 0; k < 4; k++) { const c = pol.off[seg + k]; o += b[k] * c; o1 += b1[k] * c; o2 += b2[k] * c; }
+    o1 /= KNOT; o2 /= KNOT * KNOT;
+    const lim = p.gap ? 0 : OFFSET_LIMIT[types[p.piece]] ?? ROAD_LIMIT;
+    if (Math.abs(o) > lim) { o = Math.sign(o) * lim; o1 = 0; o2 = 0; }
+    off[i] = o;
+    pos[i] = [p.pos[0] + p.r[0] * o, p.pos[1] + p.r[1] * o, p.pos[2] + p.r[2] * o];
+    const k0 = p.curv || 0, s = 1 - k0 * o;
+    const tx = p.t[0] * s + p.r[0] * o1, ty = p.t[1] * s + p.r[1] * o1, tz = p.t[2] * s + p.r[2] * o1;
+    const tl = Math.hypot(tx, ty, tz) || 1;
+    tan[i] = [tx / tl, ty / tl, tz / tl];
+    curv[i] = k0 / Math.max(0.2, s) + o2;
+  }
+  // speed: lateral grip limit from friction plus downforce, scaled by the
+  // policy's push factor, then a backward pass for braking distances
+  const D = DOWNFORCE_PER_MASS;
+  const fac = (d) => {
+    const u = d / KNOT, seg = Math.min(pol.fac.length - 4, Math.floor(u));
+    const [b] = basis(u - seg);
+    let f = 0;
+    for (let k = 0; k < 4; k++) f += b[k] * pol.fac[seg + k];
+    return f;
+  };
+  const muAt = (i) => (SURFACE_MU[L[i].surf] ?? SURFACE_MU.road) * pol.margin;
+  for (let i = 0; i < n; i++) {
+    let k = 0, kv = Infinity;
+    for (let m = Math.max(0, i - 2); m <= Math.min(n - 1, i + 2); m++) { k = Math.max(k, Math.abs(curv[m])); kv = Math.min(kv, L[m].vcurv || 0); }
+    const mu = L[i].surf === 'air' ? SURFACE_MU.road * pol.margin : muAt(i);
+    const g = GRAVITY * Math.max(0.2, L[i].u[1]);
+    let den = k - mu * (D + kv);
+    let v = den <= 1e-6 ? 300 : Math.min(300, Math.sqrt((mu * g) / den));
+    if (D * v * v > DOWNFORCE_CAP) {
+      den = k - mu * kv;
+      v = den <= 1e-6 ? 300 : Math.min(v, Math.sqrt((mu * (g + DOWNFORCE_CAP)) / den));
+    }
+    plan[i] = Math.min(300, v * fac(L[i].d));
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    const ds = Math.max(0, L[i + 1].d - L[i].d);
+    const mu = (L[i].surf === 'air' ? SURFACE_MU.road * pol.margin : muAt(i)) * 0.9;
+    const a = mu * (GRAVITY + Math.min(DOWNFORCE_CAP, D * plan[i + 1] * plan[i + 1]));
+    plan[i] = Math.min(plan[i], Math.sqrt(plan[i + 1] * plan[i + 1] + 2 * a * ds));
+  }
+  return { pos, tan, curv, off, plan, gain: pol.gain, preview: pol.preview };
+}
+
+// Drives a compiled policy. Same controls a player has: steer, throttle, brake.
+export class AIDriver {
+  constructor(built, compiled) {
+    this.line = built.line;
+    this.c = compiled;
+    this.idx = 0;
+    this.stuck = 0;
+  }
+
+  locate(p) {
+    const L = this.line;
+    let best = Infinity, bi = this.idx;
+    const lo = Math.max(0, this.idx - 4), hi = Math.min(L.length - 1, this.idx + 50);
+    for (let i = lo; i <= hi; i++) {
+      const d = vdist(L[i].pos, p);
+      if (d < best) { best = d; bi = i; }
+    }
+    // lost the line (a new lap starts back at its beginning): search it all
+    if (best > 40) {
+      for (let i = 0; i < L.length; i++) {
+        const d = vdist(L[i].pos, p);
+        if (d < best) { best = d; bi = i; }
+      }
+    }
+    this.idx = bi;
+    return bi;
+  }
+
+  input(car, dt) {
+    const L = this.line, C = this.c, n = L.length;
+    const i = this.locate(car.p);
+    const sp = car.speed;
+    const { f, u, r } = car.basis();
+    const vx = vdot(car.v, f);
+
+    if (!car.grounded && car.airTime > 0.05) {
+      this.stuck = sp < 1 ? this.stuck + dt : 0;
+      const hit = car.world.raycast(car.p, [0, -1, 0], 150, {});
+      const nrm = hit && hit.n[1] > 0.3 ? hit.n : [0, 1, 0];
+      const cmd = vdot(f, nrm) * 4 + vdot(car.w, r) * 0.8;
+      return { steer: 0, throttle: cmd < -0.05 ? clamp(-cmd * 3, 0, 1) : 0, brake: cmd > 0.05 ? clamp(cmd * 3, 0, 1) : 0, analog: true, assists: true, wantRespawn: this.stuck > 2 };
+    }
+
+    // where along the line the car is, between two line points
+    const along = vdot(vsub(car.p, L[i].pos), L[i].t);
+    const a = along >= 0 ? Math.min(i, n - 2) : Math.max(0, i - 1);
+    const seg = Math.max(1e-6, L[a + 1].d - L[a].d);
+    const lam = clamp((L[i].d + along - L[a].d) / seg, 0, 1);
+    const tp = [0, 1, 2].map((k) => C.pos[a][k] + (C.pos[a + 1][k] - C.pos[a][k]) * lam);
+    const T = C.tan[lam < 0.5 ? a : a + 1];
+
+    let j = i;
+    const preview = 2 + C.preview * sp;
+    while (j < n - 1 && L[j].d - L[i].d < preview) j++;
+    const headErr = Math.atan2(vdot(T, r), vdot(T, f));
+    const offset = vdot(vsub(tp, car.p), r);
+    const ff = Math.atan(WHEELBASE * C.curv[j]);
+    const angle = ff + headErr + Math.atan((C.gain * offset) / (Math.abs(vx) + 3));
+    const steer = clamp(angle / car.steerLimit(vx), -1, 1);
+    const z = vdot(vsub(L[Math.min(n - 1, i + 3)].pos, car.p), f);
+
+    let vt = C.plan[a] + (C.plan[a + 1] - C.plan[a]) * lam;
+    for (let m = a + 1; m < Math.min(n, i + 6); m++) vt = Math.min(vt, C.plan[m]);
+    let throttle = clamp((vt - sp) * 0.4 + 0.3, 0, 1) * clamp(1.6 - Math.abs(steer), 0.3, 1);
+    let brake = sp > vt + 3 ? clamp((sp - vt - 3) * 0.5, 0.3, 1) * (1 - 0.6 * Math.abs(steer)) : 0;
+    const beta = Math.atan2(vdot(car.v, r), Math.abs(vx) + 0.1);
+    if (Math.abs(beta) > 0.18 && sp > 5) throttle = 0;
+    if (sp > vt + 0.5) throttle = 0;
+    if (Math.abs(steer) > 0.95 && sp > 8) { throttle = 0; brake = Math.max(brake, 0.25); }
+    if (z < 0 && sp < 5) throttle = 1;
+
+    const off = vdist(L[i].pos, car.p) > 12 && !L[i].gap;
+    this.stuck = sp < 1 || off ? this.stuck + dt : 0;
+    return { steer, throttle, brake, analog: true, assists: true, wantRespawn: this.stuck > 1 };
+  }
+}
+
+// ---------------------------------------------------------------- training
+
+const RACE_SKIP = new Set(['built', 'world', 'car', 'listeners', 'cps', 'finishGates', 'startGate', 'ghost']);
+const CAR_SKIP = new Set(['world', 'contacts', 'hitTmp']);
+function pickClone(obj, skip) {
+  const o = {};
+  for (const k of Object.keys(obj)) if (!skip.has(k)) o[k] = obj[k];
+  return structuredClone(o);
+}
+
+export class Trainer {
+  constructor(track, opts = {}) {
+    this.built = buildTrack(track);
+    this.race = new Race(this.built, new World(this.built.tris));
+    this.line = this.built.line;
+    this.rand = rng(opts.seed ?? 12345);
+    this.attempts = 0;
+    this.improvements = 0;
+    this.sigmaOff = 1.6;
+    this.sigmaFac = 0.06;
+    this.history = [];
+    this.start = opts.policy || null;
+    this.best = null; // the first attempt drives the starting policy
+  }
+
+  init() {
+    const base = initialPolicy(this.built);
+    const resume = this.start && Array.isArray(this.start.off) && this.start.off.length === base.off.length;
+    this.best = this.fullRun(resume ? this.start : base);
+    if (!this.best.time && resume) this.best = this.fullRun(base);
+    if (this.best.time) this.history.push([0, this.best.time]);
+    // warm-up: a tight line at a few levels of overall push, before the
+    // small changes start
+    const tight = smoothPolicy(this.built, base);
+    this.warmup = resume ? [] : [0.74, 0.8, 0.86, 0.92, 0.98].map((m) => ({ ...tight, margin: m })).concat([0.74, 0.82].map((m) => ({ ...base, margin: m })));
+  }
+
+  // What the page shows; the run itself (ghost, splits, policy) only when asked
+  report(withRun) {
+    const b = this.best;
+    return {
+      ready: !!b, failed: !!b && !b.time, attempts: this.attempts, improvements: this.improvements,
+      time: b ? b.time : null, history: this.history.slice(-400),
+      run: withRun && b && b.time ? { time: b.time, cps: b.cps, ghost: b.ghost, pol: b.pol } : null,
+    };
+  }
+
+  // drive a policy from the start; returns the run record or one with time null
+  fullRun(pol) {
+    const compiled = compilePolicy(this.built, pol);
+    const rec = this.drive(pol, compiled, null, null);
+    return rec && rec.time ? rec : { time: null, pol };
+  }
+
+  // Drive from a saved state of the best run (or from the start). With `cmp`,
+  // stop early when the attempt is clearly slower, or when it has rejoined
+  // the best run after the changed stretch (then its finish time is known).
+  drive(pol, compiled, snap, cmp) {
+    const race = this.race, car = race.car, L = this.line, n = L.length;
+    const driver = new AIDriver(this.built, compiled);
+    // progress: the planes through each line point, once per lap
+    const N = n * race.laps, lapLen = L[n - 1].d;
+    const dAt = (k) => Math.floor(k / n) * lapLen + L[k % n].d;
+    const cross = { t: new Float64Array(N).fill(NaN), lat: new Float64Array(N), spd: new Float64Array(N) };
+    let k = 0, snaps = [];
+    if (snap) {
+      Object.assign(car, structuredClone(snap.car));
+      Object.assign(race, structuredClone(snap.race));
+      race.ghost = cmp.ghost.slice(0, snap.ghostLen);
+      driver.idx = snap.idx; driver.stuck = snap.stuck;
+      k = snap.k;
+      for (let m = 0; m < k; m++) { cross.t[m] = cmp.cross.t[m]; cross.lat[m] = cmp.cross.lat[m]; cross.spd[m] = cmp.cross.spd[m]; }
+      snaps = cmp.snaps.filter((s) => s.tick <= snap.tick);
+    } else {
+      race.reset();
+      race.phase = 'running';
+      race.car.frozen = false;
+      race.recordGhost();
+    }
+    let prev = [...car.p], tPrev = race.time;
+    const maxTicks = Math.round(300 / DT);
+    while (race.phase === 'running') {
+      if (race.ticks % SNAP_EVERY === 0 && (!snaps.length || snaps[snaps.length - 1].tick < race.ticks)) {
+        snaps.push({ tick: race.ticks, k, idx: driver.idx, stuck: driver.stuck, car: pickClone(car, CAR_SKIP), race: pickClone(race, RACE_SKIP), ghostLen: race.ghost.length });
+      }
+      const inp = driver.input(car, DT);
+      if (inp.wantRespawn) return null;
+      prev[0] = car.p[0]; prev[1] = car.p[1]; prev[2] = car.p[2];
+      tPrev = race.time;
+      race.tick(inp);
+      if (race.respawns || race.ticks > maxTicks) return null;
+      // crossings of the planes through each line point
+      while (k < N) {
+        const pt = L[k % n], P = pt.pos, tk = pt.t;
+        const a1 = (car.p[0] - P[0]) * tk[0] + (car.p[1] - P[1]) * tk[1] + (car.p[2] - P[2]) * tk[2];
+        if (a1 < 0) break;
+        const a0 = (prev[0] - P[0]) * tk[0] + (prev[1] - P[1]) * tk[1] + (prev[2] - P[2]) * tk[2];
+        const lam = a0 < 0 ? a0 / (a0 - a1) : 0;
+        cross.t[k] = tPrev + lam * DT;
+        cross.lat[k] = vdot(vsub(car.p, P), pt.r);
+        cross.spd[k] = car.speed;
+        if (cmp && !Number.isNaN(cmp.cross.t[k])) {
+          const dt = cross.t[k] - cmp.cross.t[k];
+          const dv = cross.spd[k] - cmp.cross.spd[k];
+          const past = dAt(k) - L[cmp.lastDiff].d;
+          // behind and no faster: it won't make that back
+          if (dt > 0.25 || (past > 40 && dt > 0.002 && dv < 0.3)) return { slower: true };
+          // back on the best run's line at about its speed: the time gap now
+          // is the gap at the finish. If it's ahead, drive it out to be sure.
+          if (past > 25 && Math.abs(cross.lat[k] - cmp.cross.lat[k]) < 0.15 && Math.abs(dv) < 0.15) {
+            if (dt > -0.001) return { slower: true };
+            cmp = null;
+          }
+        }
+        k++;
+      }
+    }
+    if (race.phase !== 'finished') return null;
+    return { time: race.finishTime, cps: race.cpTimes.map((x) => Math.round(x * 1000) / 1000), ghost: race.ghost, cross, snaps, pol, compiled };
+  }
+
+  mutate(pol) {
+    const r = this.rand;
+    const gauss = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
+    const p = { ...pol, off: [...pol.off], fac: [...pol.fac] };
+    const nk = p.off.length;
+    const roll = r();
+    if (roll < 0.03) {
+      p.margin = clamp(p.margin * Math.exp(gauss() * 0.02), 0.5, 1.05);
+    } else if (roll < 0.05) {
+      p.gain = clamp(p.gain * Math.exp(gauss() * 0.1), 0.4, 4);
+      p.preview = clamp(p.preview * Math.exp(gauss() * 0.1), 0.04, 0.3);
+    } else {
+      const c = Math.floor(r() * nk), w = 1 + Math.floor(r() * 3);
+      const amp = gauss();
+      for (let k = Math.max(0, c - w); k <= Math.min(nk - 1, c + w); k++) {
+        const fall = 1 - Math.abs(k - c) / (w + 1);
+        if (roll < 0.62) p.off[k] = clamp(p.off[k] + amp * this.sigmaOff * fall, -ROAD_LIMIT, ROAD_LIMIT);
+        else p.fac[k] = clamp(p.fac[k] * Math.exp(amp * this.sigmaFac * fall), 0.6, 1.8);
+      }
+    }
+    return p;
+  }
+
+  // One attempt. Returns true when it set a new best.
+  attempt() {
+    if (!this.best) { this.init(); return !!this.best.time; }
+    const best = this.best;
+    if (!best.time) return false;
+    this.attempts++;
+    if (this.warmup.length) {
+      const res = this.fullRun(this.warmup.shift());
+      if (!res.time || res.time >= best.time) return false;
+      this.best = res;
+      this.improvements++;
+      this.history.push([this.attempts, res.time]);
+      return true;
+    }
+    const pol = this.mutate(best.pol);
+    const compiled = compilePolicy(this.built, pol);
+    // first and last line points where the targets changed
+    const n = this.line.length, B = best.compiled;
+    let first = -1, last = -1;
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(compiled.off[i] - B.off[i]) > 1e-9 || Math.abs(compiled.plan[i] - B.plan[i]) > 1e-9 || compiled.gain !== B.gain || compiled.preview !== B.preview) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    if (first < 0) return false;
+    // resume from the last saved state well before the change
+    const dStart = this.line[first].d - 45;
+    let snap = null;
+    for (const s of best.snaps) if (this.line[Math.min(n - 1, s.idx)].d < dStart && s.k <= first) snap = s;
+    const res = this.drive(pol, compiled, snap, { ...best, lastDiff: last });
+    if (!res || res.slower || !res.time || res.time >= best.time) {
+      this.sigmaOff = Math.max(0.3, this.sigmaOff * 0.998);
+      this.sigmaFac = Math.max(0.01, this.sigmaFac * 0.998);
+      return false;
+    }
+    this.best = res;
+    this.improvements++;
+    this.sigmaOff = Math.min(3, this.sigmaOff * 1.02);
+    this.sigmaFac = Math.min(0.12, this.sigmaFac * 1.02);
+    this.history.push([this.attempts, res.time]);
+    return true;
+  }
+
+  // Train for about `ms` milliseconds; returns how many new bests were found.
+  step(ms) {
+    const end = performanceNow() + ms;
+    let found = 0;
+    while (performanceNow() < end) if (this.attempt()) found++;
+    return found;
+  }
+}
+
+const performanceNow = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());

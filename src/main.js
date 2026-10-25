@@ -1,4 +1,6 @@
-// App controller: menu, races, HUD, finish screen and the editor hand-off.
+// App controller: menu, races, HUD, finish screen, the AI driver view and the
+// editor hand-off.
+/* global AI_WORKER_SRC */
 
 import { parseTrack, serializeTrack } from './pieces.js';
 import { buildTrack } from './geometry.js';
@@ -11,6 +13,7 @@ import { Bot } from './bot.js';
 import { CAMPAIGN } from './tracks.js';
 import { Editor } from './editor.js';
 import { randomTrack } from './generator.js';
+import { Trainer } from './ai.js';
 import * as store from './storage.js';
 import { fmtTime, medalsFor, medalOf, trackKey } from './storage.js';
 import { qslerp, vlerp } from './math.js';
@@ -66,6 +69,7 @@ function makeSession(track, meta, bot = false) {
     meta.key = meta.key || trackKey(track);
     if (meta.kind !== 'campaign') meta.medals = userMedals(track);
     s.pb = loadPB(meta);
+    s.rival = meta.rival || null;
   }
   race.on((ev) => onRaceEvent(s, ev));
   return s;
@@ -99,7 +103,7 @@ function retry() {
 
 function renderTargets(s) {
   const m = s.meta.medals;
-  const pb = s.pb ? `<span>PB <b class="num">${fmtTime(s.pb.time)}</b></span>` : '';
+  const pb = (s.pb ? `<span>PB <b class="num">${fmtTime(s.pb.time)}</b></span>` : '') + (s.rival ? `<span><i class="medal ai"></i>AI <b class="num">${fmtTime(s.rival.time)}</b></span>` : '');
   if (!m) { $('hud-targets').innerHTML = pb || (s.meta.kind === 'test' ? '<span>Test drive</span>' : ''); return; }
   $('hud-targets').innerHTML = MEDALS.slice(0, 2).map((k) => `<span><i class="medal ${k}"></i><b class="num">${fmtTime(m[k])}</b></span>`).join('') + pb;
 }
@@ -113,7 +117,8 @@ function onRaceEvent(s, ev) {
   if (ev.type === 'reset' || ev.type === 'respawn') { s.snap = true; s.split = null; }
   if (ev.type === 'go') sound.count(true);
   if (ev.type === 'cp' || ev.type === 'lap') {
-    const ref = s.pb && s.pb.cps ? s.pb.cps[ev.index] : null;
+    const refRun = s.pb && s.pb.cps ? s.pb : s.rival;
+    const ref = refRun && refRun.cps ? refRun.cps[ev.index] : null;
     const delta = ref != null ? ev.time - ref : null;
     s.split = { delta, time: ev.time, until: performance.now() + 2600 };
     sound.checkpoint(delta != null && delta < 0);
@@ -161,7 +166,9 @@ function showFinish(s, ev, prev, note) {
     return `<div class="${have ? 'got' : ''}"><i class="medal ${have ? k : 'none'}"></i><b>${MEDAL_NAME[k]}</b>${fmtTime(m[k])}</div>`;
   }).join('') : '';
   const resp = ev.respawns ? `${ev.respawns} respawn${ev.respawns > 1 ? 's' : ''}. ` : '';
-  $('fin-note').textContent = resp + (note || (!m && s.meta.kind !== 'campaign' ? 'This track has no author time yet. Validate it from the editor.' : ''));
+  const vsAI = s.rival ? (ev.time < s.rival.time ? `You beat the AI by ${fmtTime(s.rival.time - ev.time)}. ` : `The AI was ${fmtTime(ev.time - s.rival.time)} faster. `) : '';
+  $('fin-note').textContent = vsAI + resp + (note || (!m && s.meta.kind !== 'campaign' ? 'This track has no author time yet. Validate it from the editor.' : ''));
+  $('btn-fin-ai').hidden = s.meta.kind === 'test';
   const random = s.meta.kind === 'random';
   const hasNext = random || (s.meta.kind === 'campaign' && s.meta.index < CAMPAIGN.length - 1);
   $('btn-next').hidden = !hasNext;
@@ -236,8 +243,10 @@ function drawSession(s, dt, camMode) {
   if (ev.landed) R.kick(0.25 + 0.6 * ev.landed);
   if (ev.wallHit) R.kick(0.25 + ev.wallHit);
   if (!s.bot) onEffects(s, ev);
-  const ghost = !s.bot && settings.ghost && s.pb && s.pb.ghost && race.phase !== 'finished' ? ghostAt(s.pb.ghost, race.phase === 'countdown' ? 0 : race.time + a * DT) : null;
+  const gt = race.phase === 'countdown' ? 0 : race.time + a * DT;
+  const ghost = !s.bot && settings.ghost && s.pb && s.pb.ghost && race.phase !== 'finished' ? ghostAt(s.pb.ghost, gt) : null;
   R.updateGhost(ghost);
+  R.updateGhost(s.rival && race.phase !== 'finished' ? ghostAt(s.rival.ghost, gt, s.rivalAt || (s.rivalAt = { p: [0, 0, 0], q: [0, 0, 0, 1] })) : null, R.aiGhost);
   let up = [0, 0, 0];
   for (const w of car.wheels) if (w.contact) { up[0] += w.n[0]; up[1] += w.n[1]; up[2] += w.n[2]; }
   if (!car.grounded) up = [0, 1, 0];
@@ -319,6 +328,13 @@ function frame(now) {
     stepSession(s, null, dt);
     drawSession(s, dt, 1);
     if (s.race.phase === 'finished' && performance.now() - s.finishedAt > 2500) { app.attractIdx++; startAttract(); }
+  } else if (app.mode === 'ai' && app.ai) {
+    const a = app.ai;
+    if (a.local && !a.paused) {
+      const found = a.local.step(10);
+      onAIReport(a, a.local.report(found > 0));
+    }
+    drawAI(a, dt);
   } else if (app.mode === 'editor') {
     editor.frame(dt);
   }
@@ -328,6 +344,11 @@ function frame(now) {
 
 // ---------------------------------------------------------------- actions
 input.on((action) => {
+  if (app.mode === 'ai') {
+    if (action === 'pause') leaveAI();
+    else if (action === 'camera' || action.startsWith('cam')) R.camMode = action === 'camera' ? (R.camMode + 1) % 3 : +action.slice(3);
+    return;
+  }
   if (app.mode !== 'race') {
     if (action === 'pause' && app.overlay === 'controls') hideOverlay();
     if (action === 'pause' && app.overlay === 'codebox') hideOverlay();
@@ -368,6 +389,7 @@ function togglePause(force) {
     const s = app.session;
     $('pause-track').textContent = s.meta.name;
     $('btn-exit').textContent = s.meta.kind === 'test' ? 'Back to editor' : 'Exit to menu';
+    $('btn-pause-ai').hidden = s.meta.kind === 'test';
     showOverlay('pause');
     $('btn-resume').focus({ preventScroll: true });
   } else hideOverlay();
@@ -394,7 +416,7 @@ function hideOverlay() {
 }
 function hideAll() {
   hideOverlay();
-  for (const id of ['menu', 'hud', 'touch', 'editor']) $(id).hidden = true;
+  for (const id of ['menu', 'hud', 'touch', 'editor', 'aiview']) $(id).hidden = true;
 }
 
 // ---------------------------------------------------------------- menu
@@ -412,11 +434,11 @@ function renderMenu() {
     const pb = store.getPB('c' + def.id);
     const m = medalOf(pb && pb.time, medalsFor(def.author));
     if (m) medals += 4 - MEDALS.indexOf(m);
-    return `<button class="card" data-play="${i}">
+    return `<div class="cardwrap"><button class="card" data-play="${i}">
       <div class="row"><span class="code">${def.id}</span><span class="tier ${def.tier}">${def.tier}</span></div>
       <div class="name">${def.name}${def.laps > 1 ? ` <span style="color:var(--muted);font-size:14px">· ${def.laps} laps</span>` : ''}</div>
       <div class="row"><span class="pb ${pb ? '' : 'empty'}">${pb ? fmtTime(pb.time) : 'No time yet'}</span><i class="medal ${m || 'none'}" title="${m ? MEDAL_NAME[m] + ' medal' : 'No medal'}"></i></div>
-    </button>`;
+    </button><button class="card-ai" data-ai="${i}" title="Watch the AI learn this track">AI</button></div>`;
   }).join('');
   $('medal-count').textContent = `${medals} / ${CAMPAIGN.length * 4} medals`;
   const list = store.getUserTracks();
@@ -430,6 +452,7 @@ function renderMenu() {
       <span class="pb">${pb ? fmtTime(pb.time) : ''}</span>
       <button class="btn small primary" data-uplay="${e.id}">Race</button>
       <button class="btn small" data-uedit="${e.id}">Edit</button>
+      <button class="btn small" data-uai="${e.id}">AI</button>
       <button class="btn small" data-ucode="${e.id}">Code</button>
       <button class="btn small danger" data-udel="${e.id}">Delete</button>
     </div>`;
@@ -437,6 +460,8 @@ function renderMenu() {
 }
 
 $('campaign').addEventListener('click', (e) => {
+  const ai = e.target.closest('[data-ai]');
+  if (ai) { const i = +ai.dataset.ai; openAI(campaignTrack(i), campaignMeta(i)); return; }
   const b = e.target.closest('[data-play]');
   if (b) { const i = +b.dataset.play; startRace(campaignTrack(i), campaignMeta(i)); }
 });
@@ -444,12 +469,13 @@ $('mytracks').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   const list = store.getUserTracks();
-  const id = b.dataset.uplay || b.dataset.uedit || b.dataset.ucode || b.dataset.udel;
+  const id = b.dataset.uplay || b.dataset.uedit || b.dataset.ucode || b.dataset.udel || b.dataset.uai;
   const entry = list.find((x) => x.id === id);
   if (!entry) return;
   const t = parseTrack(entry.track);
   if (b.dataset.uplay) startRace(t, { kind: 'user', name: entry.name });
   else if (b.dataset.uedit) openEditor(t, entry.id);
+  else if (b.dataset.uai) openAI(t, { kind: 'user', name: entry.name });
   else if (b.dataset.ucode) openCode('export', t);
   else if (b.dataset.udel) {
     if (b.dataset.armed) {
@@ -573,10 +599,206 @@ $('btn-save-random').onclick = () => {
   list.push({ id: 'u' + Date.now().toString(36), name: s.track.name, track: serializeTrack(s.track), saved: Date.now() });
   if (!store.setUserTracks(list)) { $('fin-note').textContent = 'Could not save: this browser is blocking storage.'; return; }
   if (s.meta.pb) store.setPB(s.meta.key, s.meta.pb);
+  if (s.meta.aiRun) store.save('ai.' + s.meta.key, s.meta.aiRun);
   s.meta.saved = true;
   $('btn-save-random').textContent = 'Saved';
   $('btn-save-random').disabled = true;
 };
+
+// ---------------------------------------------------------------- AI driver
+// The AI learns a track in a worker (or on the page if workers are blocked)
+// while its best run replays here as a ghost, with the line it drove drawn on
+// the road. Its best run is kept per track so it can carry on later and be
+// raced against.
+function loadAI(meta) {
+  return meta.kind === 'random' && !meta.saved ? meta.aiRun || null : store.load('ai.' + meta.key, null);
+}
+function saveAI(meta, run) {
+  if (meta.kind === 'random' && !meta.saved) meta.aiRun = run;
+  else store.save('ai.' + meta.key, run);
+}
+
+function openAI(track, meta) {
+  stopAttract();
+  if (app.ai) stopTrainer(app.ai);
+  app.session = null;
+  app.paused = false;
+  hideAll();
+  sound.engine(0, 0, false);
+  sound.ambient(0, 0, false);
+  meta.key = meta.key || trackKey(track);
+  if (meta.kind !== 'campaign') meta.medals = userMedals(track);
+  const built = buildTrack(track);
+  R.setTrack(built);
+  R.car.visible = false;
+  R.shadow.visible = false;
+  R.ghost.visible = false;
+  const saved = loadAI(meta);
+  const a = { track, meta, built, run: saved, report: null, t: 0, snap: true, paused: false, pb: loadPB(meta), flash: null, worker: null, local: null };
+  app.ai = a;
+  app.mode = 'ai';
+  R.setAILine(saved && saved.ghost);
+  $('aiview').hidden = false;
+  $('ai-toggle').textContent = 'Pause';
+  startTrainer(a, saved && saved.pol);
+  renderAI(a);
+}
+
+function startTrainer(a, policy) {
+  const msg = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, seed: (Math.random() * 2 ** 31) >>> 0 };
+  const onPage = () => {
+    if (a.worker) { a.worker.terminate(); a.worker = null; }
+    a.local = new Trainer(parseTrack(msg.track), { policy: msg.policy, seed: msg.seed });
+  };
+  let worker = null;
+  try {
+    worker = typeof AI_WORKER_SRC === 'string'
+      ? new Worker(URL.createObjectURL(new Blob([AI_WORKER_SRC], { type: 'text/javascript' })))
+      : new Worker('src/ai-worker.js', { type: 'module' });
+  } catch { worker = null; }
+  if (!worker) { onPage(); return; }
+  a.worker = worker;
+  let heard = false;
+  worker.onmessage = (e) => {
+    heard = true;
+    if (e.data.type === 'report') onAIReport(a, e.data.report);
+  };
+  worker.onerror = (e) => {
+    e.preventDefault();
+    if (!heard && app.ai === a) onPage();
+  };
+  worker.postMessage(msg);
+}
+
+function stopTrainer(a) {
+  if (a.worker) { a.worker.terminate(); a.worker = null; }
+  a.local = null;
+}
+
+function onAIReport(a, rep) {
+  if (app.ai !== a) return;
+  a.report = rep;
+  if (rep.run && (!a.run || rep.run.time < a.run.time)) {
+    const prev = a.run;
+    a.run = rep.run;
+    saveAI(a.meta, rep.run);
+    R.setAILine(rep.run.ghost);
+    a.t = 0;
+    a.snap = true;
+    a.flash = { text: prev ? `New best ${fmtTime(rep.run.time)} (${fmtTime(rep.run.time - prev.time, true)})` : `First run ${fmtTime(rep.run.time)}`, until: performance.now() + 2200, shown: false };
+  }
+  renderAI(a);
+}
+
+function renderAI(a) {
+  const rep = a.report, run = a.run, m = a.meta.medals;
+  $('ai-track').textContent = (a.meta.code ? a.meta.code + ' · ' : '') + a.meta.name;
+  $('ai-status').textContent = a.paused ? 'Paused' : !rep || !rep.ready ? 'Starting' : rep.failed ? 'Stuck' : 'Learning';
+  $('ai-time').textContent = fmtTime(run ? run.time : null);
+  const row = (label, t) => {
+    if (t == null) return '';
+    const d = run ? run.time - t : null;
+    return `<div><b>${label}</b><span class="num">${fmtTime(t)}</span>${d == null ? '' : `<span class="num ${d < 0 ? 'ahead' : 'behind'}">${fmtTime(d, true)}</span>`}</div>`;
+  };
+  $('ai-compare').innerHTML = (m ? row('Author', m.author) : '') + row('Your best', a.pb ? a.pb.time : null);
+  // best time over attempts, as a step line, with the author time dashed
+  const h = rep && rep.history.length ? rep.history : run ? [[0, run.time]] : [];
+  let svg = '';
+  if (h.length) {
+    const n = Math.max(1, rep ? rep.attempts : 1);
+    let lo = Math.min(...h.map((p) => p[1])), hi = Math.max(...h.map((p) => p[1]));
+    if (m) { lo = Math.min(lo, m.author); hi = Math.max(hi, m.author); }
+    const span = Math.max(0.2, hi - lo);
+    const X = (x) => ((x / n) * 256 + 2).toFixed(1), Y = (y) => (6 + ((y - lo) / span) * 52).toFixed(1);
+    let d = `M${X(h[0][0])} ${Y(h[0][1])}`;
+    for (let i = 1; i < h.length; i++) d += ` H${X(h[i][0])} V${Y(h[i][1])}`;
+    d += ` H${X(n)}`;
+    if (m) svg += `<line x1="0" x2="260" y1="${Y(m.author)}" y2="${Y(m.author)}" stroke="var(--author)" stroke-dasharray="4 4" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+    svg += `<path d="${d}" fill="none" stroke="#a77bff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  }
+  $('ai-chart').innerHTML = svg;
+  $('ai-stats').textContent = rep && rep.failed
+    ? 'The AI could not finish this track.'
+    : `${rep ? rep.attempts.toLocaleString() : 0} attempts · ${rep ? rep.improvements : 0} improvements${a.local ? ' · running on the page' : ''}`;
+  $('ai-race').disabled = !run;
+}
+
+function drawAI(a, dt) {
+  const g = a.run && a.run.ghost;
+  const fl = $('ai-flash');
+  if (a.flash && performance.now() < a.flash.until) {
+    if (!a.flash.shown) { a.flash.shown = true; fl.textContent = a.flash.text; fl.hidden = false; fl.classList.remove('pop'); void fl.offsetWidth; fl.classList.add('pop'); }
+  } else fl.hidden = true;
+  if (!g) {
+    // nothing to replay yet: look down the start straight
+    const sp = a.built.spawn;
+    R.updateCamera(sp.pos, quatFromBasis(sp.f, sp.u), [0, 0, 0], dt, a.snap, sp.u);
+    a.snap = false;
+    R.car.visible = false;
+    return;
+  }
+  const end = g[g.length - 8];
+  a.t += dt;
+  if (a.t > end + 1.5) { a.t = 0; a.snap = true; }
+  const t = Math.min(a.t, end);
+  const st = ghostAt(g, t, a.st || (a.st = { p: [0, 0, 0], q: [0, 0, 0, 1] }));
+  R.updateGhost(st, R.aiGhost);
+  R.updateGhost(settings.ghost && a.pb && a.pb.ghost ? ghostAt(a.pb.ghost, t, a.pbAt || (a.pbAt = { p: [0, 0, 0], q: [0, 0, 0, 1] })) : null);
+  const p0 = ghostAt(g, Math.max(0, t - 0.05)).p, p1 = ghostAt(g, Math.min(end, t + 0.05)).p;
+  const v = [(p1[0] - p0[0]) * 10, (p1[1] - p0[1]) * 10, (p1[2] - p0[2]) * 10];
+  const [x, y, z, w] = st.q;
+  const up = [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+  R.updateCamera(st.p, st.q, v, dt, a.snap, up);
+  R.car.visible = false;
+  a.snap = false;
+}
+
+// quaternion [x, y, z, w] for a frame with forward f and up u (car local +z forward, +y up)
+function quatFromBasis(f, u) {
+  const r = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
+  const m00 = r[0], m01 = u[0], m02 = f[0], m10 = r[1], m11 = u[1], m12 = f[1], m20 = r[2], m21 = u[2], m22 = f[2];
+  const tr = m00 + m11 + m22;
+  if (tr > 0) { const s = Math.sqrt(tr + 1) * 2; return [(m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s]; }
+  if (m00 > m11 && m00 > m22) { const s = Math.sqrt(1 + m00 - m11 - m22) * 2; return [0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s]; }
+  if (m11 > m22) { const s = Math.sqrt(1 + m11 - m00 - m22) * 2; return [(m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s]; }
+  const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+  return [(m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s];
+}
+
+function leaveAI() {
+  const a = app.ai;
+  if (!a) return;
+  stopTrainer(a);
+  app.ai = null;
+  R.setAILine(null);
+  R.aiGhost.visible = false;
+  showMenu();
+}
+
+$('ai-toggle').onclick = () => {
+  const a = app.ai;
+  if (!a) return;
+  a.paused = !a.paused;
+  if (a.worker) a.worker.postMessage({ cmd: a.paused ? 'pause' : 'resume' });
+  $('ai-toggle').textContent = a.paused ? 'Resume' : 'Pause';
+  renderAI(a);
+};
+$('ai-exit').onclick = () => leaveAI();
+$('ai-race').onclick = () => {
+  const a = app.ai;
+  if (!a || !a.run) return;
+  stopTrainer(a);
+  app.ai = null;
+  a.meta.rival = a.run;
+  startRace(cloneTrack(a.track), a.meta);
+};
+const aiFromRace = () => {
+  const s = app.session;
+  if (!s || s.meta.kind === 'test') return;
+  openAI(cloneTrack(s.track), s.meta);
+};
+$('btn-pause-ai').onclick = aiFromRace;
+$('btn-fin-ai').onclick = aiFromRace;
 
 // ---------------------------------------------------------------- share codes
 function encodeTrack(track) {
