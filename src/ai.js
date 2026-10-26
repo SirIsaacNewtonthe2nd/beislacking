@@ -10,9 +10,9 @@
 //
 // The score is the lap time. While an attempt is judged early, speed it
 // carries counts in its favour, and its changes lean toward pushing harder.
-// Walls cost only the time they cost: the line may run right up to them, and
-// after a crash the driver backs off and carries on. It never respawns; an
-// attempt is dropped only when the car can't get going again.
+// Walls cost only the time they cost: after a crash the driver backs off and
+// carries on. It never respawns; an attempt is dropped only when the car
+// can't get going again.
 
 import { vsub, vdot, vdist, clamp } from './math.js';
 import { GRAVITY, DOWNFORCE_PER_MASS, DOWNFORCE_CAP, SURFACE_MU } from './car.js';
@@ -28,8 +28,10 @@ const SNAP_EVERY = 40;        // ticks between saved states
 
 // limits on the sideways offset, per piece type. Kickers stay on the centre
 // line so the car takes off straight and lands on the road.
-const OFFSET_LIMIT = { LOOPR: 3.5, LOOPL: 3.5, WR: 6.5, WL: 6.5, BR2: 7.5, BL2: 7.5, BR3: 7.5, BL3: 7.5, K: 0, K2: 0 };
-const ROAD_LIMIT = ROAD_HALF - 1; // wheels brush the border
+// (Letting the line run right up to the borders was tried: it learned slower
+// on jump tracks, so the line keeps about half a metre of room.)
+const OFFSET_LIMIT = { LOOPR: 2.5, LOOPL: 2.5, WR: 5, WL: 5, BR2: 6, BL2: 6, BR3: 6, BL3: 6, K: 0, K2: 0 };
+const ROAD_LIMIT = ROAD_HALF - 1.7;
 
 // uniform cubic B-spline basis and its first two derivatives
 function basis(t) {
@@ -272,7 +274,7 @@ export class Trainer {
     // warm-up: a tight line at a few levels of overall push, before the
     // small changes start
     const tight = smoothPolicy(this.built, base);
-    this.warmup = resume ? [] : [0.74, 0.82, 0.9, 0.98, 1.06].map((m) => ({ ...tight, margin: m })).concat([0.78, 0.88].map((m) => ({ ...base, margin: m })));
+    this.warmup = resume ? [] : [0.74, 0.8, 0.86, 0.92, 0.98, 1.04, 1.1].map((m) => ({ ...tight, margin: m })).concat([0.74, 0.82].map((m) => ({ ...base, margin: m })));
   }
 
   // What the page shows; the run itself (ghost, splits, policy) only when asked
@@ -348,7 +350,7 @@ export class Trainer {
           // over the next 60 m); being slower is judged on time alone
           const v = Math.max(20, cmp.cross.spd[k]);
           const score = dt - (clamp(dv, 0, 5) * 60) / (v * v);
-          if (score > 0.25 || (past > 40 && score > 0.002)) return { slower: true };
+          if (score > 0.25 || (past > 40 && score > 0.002 && dv < 0.3)) return { slower: true };
           // back on the best run's line at about its speed: the time gap now
           // is the gap at the finish. If it's ahead, drive it out to be sure.
           if (past > 25 && Math.abs(cross.lat[k] - cmp.cross.lat[k]) < 0.15 && Math.abs(dv) < 0.15) {
