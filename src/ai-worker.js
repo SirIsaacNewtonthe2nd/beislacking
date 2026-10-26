@@ -7,7 +7,7 @@ let trainer = null, running = false;
 self.onmessage = (e) => {
   const m = e.data;
   if (m.cmd === 'start') {
-    trainer = new Trainer(parseTrack(m.track), { policy: m.policy, seed: m.seed });
+    trainer = new Trainer(parseTrack(m.track), { policy: m.policy, seed: m.seed, runs: m.runs });
     running = true;
     self.postMessage({ type: 'hello' });
     setTimeout(loop, 0);

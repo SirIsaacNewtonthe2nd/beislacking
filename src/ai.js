@@ -8,6 +8,11 @@
 // saved state just before the changed stretch, and stops early once it falls
 // behind or rejoins the best run's path.
 //
+// It also learns from your runs: it reads where your car was across the road
+// and how fast you took each corner, tries your whole line at the start, and
+// keeps trying stretches of it in place of its own. Like any other change, a
+// stretch of yours stays only if it makes the lap faster.
+//
 // The score is the lap time. While an attempt is judged early, speed it
 // carries counts in its favour, and its changes lean toward pushing harder.
 // Walls cost only the time they cost: after a crash the driver backs off and
@@ -81,7 +86,7 @@ export function smoothPolicy(built, pol) {
 // curvature and planned speed.
 export function compilePolicy(built, pol) {
   const L = built.line, n = L.length;
-  const pos = new Array(n), tan = new Array(n), curv = new Float64Array(n), off = new Float64Array(n), plan = new Float64Array(n);
+  const pos = new Array(n), tan = new Array(n), curv = new Float64Array(n), off = new Float64Array(n), plan = new Float64Array(n), lat = new Float64Array(n);
   const types = built.layout.placed.map((pl) => (pl ? pl.piece.type : ''));
   for (let i = 0; i < n; i++) {
     const p = L[i];
@@ -122,6 +127,7 @@ export function compilePolicy(built, pol) {
       den = k - mu * kv;
       v = den <= 1e-6 ? 300 : Math.min(v, Math.sqrt((mu * (g + DOWNFORCE_CAP)) / den));
     }
+    lat[i] = v;
     plan[i] = Math.min(300, v * fac(L[i].d));
   }
   for (let i = n - 2; i >= 0; i--) {
@@ -130,7 +136,85 @@ export function compilePolicy(built, pol) {
     const a = mu * (GRAVITY + Math.min(DOWNFORCE_CAP, D * plan[i + 1] * plan[i + 1]));
     plan[i] = Math.min(plan[i], Math.sqrt(plan[i + 1] * plan[i + 1] + 2 * a * ds));
   }
-  return { pos, tan, curv, off, plan, gain: pol.gain, preview: pol.preview, slide: pol.slide ?? 0.18, lift: pol.lift ?? 1.6 };
+  return { pos, tan, curv, off, plan, lat, gain: pol.gain, preview: pol.preview, slide: pol.slide ?? 0.18, lift: pol.lift ?? 1.6 };
+}
+
+// ---------------------------------------------------------------- learning from your runs
+
+function splineAt(c, d) {
+  const u = Math.max(0, d) / KNOT, seg = Math.min(c.length - 4, Math.floor(u));
+  const [b] = basis(u - seg);
+  return b[0] * c[seg] + b[1] * c[seg + 1] + b[2] * c[seg + 2] + b[3] * c[seg + 3];
+}
+
+// Adjust control points so the curve passes through each target (null: leave
+// that one alone). Control point k peaks a knot behind its index.
+function fitSpline(c, targets, lo, hi) {
+  for (let it = 0; it < 24; it++) {
+    for (let k = 1; k < c.length - 1; k++) {
+      if (targets[k] == null) continue;
+      c[k] = clamp(c[k] + (targets[k] - splineAt(c, (k - 1) * KNOT)) * 1.3, lo, hi);
+    }
+  }
+  return c;
+}
+
+// Where a recorded run (ghost samples: t, position, rotation) crossed the
+// road at each line point, and how fast it was going there.
+export function readRun(built, ghost) {
+  const L = built.line, n = L.length, ns = Math.floor((ghost ? ghost.length : 0) / 8);
+  if (ns < 3) return null;
+  const off = new Float64Array(n).fill(NaN), spd = new Float64Array(n).fill(NaN);
+  let found = 0;
+  for (let i = 0; i < n; i++) {
+    const p = L[i];
+    if (p.gap) continue;
+    const P = p.pos, T = p.t;
+    let a0 = null;
+    for (let j = 0; j < ns; j++) {
+      const o = j * 8;
+      const a = (ghost[o + 1] - P[0]) * T[0] + (ghost[o + 2] - P[1]) * T[1] + (ghost[o + 3] - P[2]) * T[2];
+      if (a0 !== null && a0 < 0 && a >= 0) {
+        const q = o - 8, lam = a0 / (a0 - a);
+        const x = ghost[q + 1] + (ghost[o + 1] - ghost[q + 1]) * lam - P[0];
+        const y = ghost[q + 2] + (ghost[o + 2] - ghost[q + 2]) * lam - P[1];
+        const z = ghost[q + 3] + (ghost[o + 3] - ghost[q + 3]) * lam - P[2];
+        // near this point: the plane also cuts far-off parts of the track
+        if (x * x + y * y + z * z < 225) {
+          if (Number.isNaN(off[i])) found++;
+          off[i] = x * p.r[0] + y * p.r[1] + z * p.r[2]; // the last pass wins (after a respawn, laps)
+          spd[i] = Math.hypot(ghost[o + 1] - ghost[q + 1], ghost[o + 2] - ghost[q + 2], ghost[o + 3] - ghost[q + 3]) / Math.max(1e-3, ghost[o] - ghost[q]);
+        }
+      }
+      a0 = a;
+    }
+  }
+  return found > n * 0.3 ? { off, spd } : null;
+}
+
+// A run read by readRun, as a policy built on `onto`: its line, and its pace
+// through corners as push factors on top of the planner (at onto's margin).
+// `has` marks the control points the run covered.
+export function runPolicy(built, run, onto) {
+  const L = built.line, n = L.length, nk = onto.off.length;
+  const tOff = new Array(nk).fill(null), at = new Array(nk).fill(-1);
+  let i = 0;
+  for (let k = 1; k < nk - 1; k++) {
+    const d = (k - 1) * KNOT;
+    while (i < n - 1 && L[i + 1].d <= d) i++;
+    let bj = -1, bd = KNOT / 2;
+    for (let j = Math.max(0, i - 3); j <= Math.min(n - 1, i + 4); j++) {
+      const dd = Math.abs(L[j].d - d);
+      if (!Number.isNaN(run.off[j]) && dd <= bd) { bd = dd; bj = j; }
+    }
+    if (bj >= 0) { tOff[k] = run.off[bj]; at[k] = bj; }
+  }
+  const off = fitSpline([...onto.off], tOff, -ROAD_LIMIT, ROAD_LIMIT);
+  // pace where grip limits it (corners): its speed over the planner's limit on that line
+  const lat = compilePolicy(built, { ...onto, off, fac: onto.fac.map(() => 1) }).lat;
+  const tFac = at.map((j) => (j >= 0 && lat[j] < 150 && run.spd[j] > 1 ? run.spd[j] / lat[j] : null));
+  const fac = fitSpline([...onto.fac], tFac, 0.6, 2.2);
+  return { ...onto, off, fac, has: tOff.map((x) => x != null), at, pace: tFac.map((x) => x != null) };
 }
 
 // Drives a compiled policy. Same controls a player has: steer, throttle, brake.
@@ -263,6 +347,18 @@ export class Trainer {
     this.history = [];
     this.start = opts.policy || null;
     this.best = null; // the first attempt drives the starting policy
+    // your runs, read once the track is built
+    this.runs = (opts.runs || []).map((g) => readRun(this.built, g)).filter(Boolean);
+    this.runCache = new Map();
+    this.fromRuns = 0;      // new bests that came from your driving
+    this.lastSource = null;
+  }
+
+  // run i as a policy at a given margin (cached)
+  runAt(i, margin) {
+    const key = i + ':' + margin;
+    if (!this.runCache.has(key)) this.runCache.set(key, runPolicy(this.built, this.runs[i], { ...initialPolicy(this.built), margin }));
+    return this.runCache.get(key);
   }
 
   init() {
@@ -274,7 +370,15 @@ export class Trainer {
     // warm-up: a tight line at a few levels of overall push, before the
     // small changes start
     const tight = smoothPolicy(this.built, base);
-    this.warmup = resume ? [] : [0.74, 0.8, 0.86, 0.92, 0.98, 1.04, 1.1].map((m) => ({ ...tight, margin: m })).concat([0.74, 0.82].map((m) => ({ ...base, margin: m })));
+    this.warmup = resume ? [] : [0.74, 0.8, 0.86, 0.92, 0.98, 1.04, 1.1].map((m) => ({ pol: { ...tight, margin: m } })).concat([0.74, 0.82].map((m) => ({ pol: { ...base, margin: m } })));
+    // your runs: each one's line and pace, and its line at a few levels of push
+    // (and, when carrying on, your line on the AI's own pace)
+    this.runs.forEach((run, i) => {
+      const cur = this.best.time ? this.best.pol : base;
+      const { has, at, pace, ...pol } = runPolicy(this.built, run, cur);
+      this.warmup.push({ pol, source: 'run', practice: 3, run, at, pace });
+      for (const m of resume ? [cur.margin] : [0.86, 0.98]) this.warmup.push({ pol: { ...cur, margin: m, off: this.runAt(i, m).off }, source: 'run' });
+    });
   }
 
   // What the page shows; the run itself (ghost, splits, policy) only when asked
@@ -282,6 +386,7 @@ export class Trainer {
     const b = this.best;
     return {
       ready: !!b, failed: !!b && !b.time, attempts: this.attempts, improvements: this.improvements,
+      runs: this.runs.length, fromRuns: this.fromRuns, lastSource: this.lastSource,
       time: b ? b.time : null, history: this.history.slice(-400),
       run: withRun && b && b.time ? { time: b.time, cps: b.cps, ghost: b.ghost, pol: b.pol } : null,
     };
@@ -365,11 +470,41 @@ export class Trainer {
     return { time: race.finishTime, cps: race.cpTimes.map((x) => Math.round(x * 1000) / 1000), ghost: race.ghost, cross, snaps, pol, compiled };
   }
 
+  // After driving a copy of one of your runs: match your speed through each
+  // corner more closely next time (it tends to come in under its targets),
+  // or ease off everywhere if it didn't make it round. Practice stops once a
+  // lap comes out slower than the one before.
+  practise(item, res) {
+    const n = this.line.length, last = (this.race.laps - 1) * n;
+    const fac = [...item.pol.fac];
+    for (let k = 0; k < fac.length; k++) {
+      if (!item.pace[k]) continue;
+      if (!res.time) { fac[k] *= 0.95; continue; }
+      const j = item.at[k], got = res.cross.spd[last + j], want = item.run.spd[j];
+      if (got > 1 && want > 1) fac[k] = clamp(fac[k] * Math.pow(want / got, 0.8), 0.6, 2.2);
+    }
+    return { ...item, pol: { ...item.pol, fac }, practice: item.practice - 1, lastTime: res.time || item.lastTime };
+  }
+
+  // A changed copy of a policy, and where the change came from
   mutate(pol) {
     const r = this.rand;
     const gauss = () => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(2 * Math.PI * r());
     const p = { ...pol, off: [...pol.off], fac: [...pol.fac] };
     const nk = p.off.length;
+    // take a stretch of one of your runs: its line, and sometimes its pace
+    if (this.runs.length && r() < 0.2) {
+      const run = this.runAt(Math.floor(r() * this.runs.length), p.margin);
+      const c = Math.floor(r() * nk), w = 2 + Math.floor(r() * 7), pace = r() < 0.5;
+      let copied = 0;
+      for (let k = Math.max(0, c - w); k <= Math.min(nk - 1, c + w); k++) {
+        if (!run.has[k]) continue;
+        p.off[k] = run.off[k];
+        if (pace) p.fac[k] = run.fac[k];
+        copied++;
+      }
+      if (copied) return [p, 'run'];
+    }
     const roll = r();
     if (roll < 0.03) {
       p.margin = clamp(p.margin * Math.exp((gauss() + 0.4) * 0.02), 0.5, 1.3);
@@ -388,7 +523,7 @@ export class Trainer {
         else p.fac[k] = clamp(p.fac[k] * Math.exp((amp + 0.2) * this.sigmaFac * fall), 0.6, 2.2); // leans toward more push
       }
     }
-    return p;
+    return [p, 'self'];
   }
 
   // One attempt. Returns true when it set a new best.
@@ -398,14 +533,18 @@ export class Trainer {
     if (!best.time) return false;
     this.attempts++;
     if (this.warmup.length) {
-      const res = this.fullRun(this.warmup.shift());
+      const item = this.warmup.shift(), { pol, source = 'self' } = item;
+      const res = this.fullRun(pol);
+      if (item.practice && !(res.time && item.lastTime && res.time > item.lastTime)) this.warmup.unshift(this.practise(item, res));
       if (!res.time || res.time >= best.time) return false;
       this.best = res;
       this.improvements++;
+      if (source === 'run') this.fromRuns++;
+      this.lastSource = source;
       this.history.push([this.attempts, res.time]);
       return true;
     }
-    const pol = this.mutate(best.pol);
+    const [pol, source] = this.mutate(best.pol);
     const compiled = compilePolicy(this.built, pol);
     // first and last line points where the targets changed
     const n = this.line.length, B = best.compiled;
@@ -429,6 +568,8 @@ export class Trainer {
     }
     this.best = res;
     this.improvements++;
+    if (source === 'run') this.fromRuns++;
+    this.lastSource = source;
     this.sigmaOff = Math.min(3, this.sigmaOff * 1.02);
     this.sigmaFac = Math.min(0.12, this.sigmaFac * 1.02);
     this.history.push([this.attempts, res.time]);

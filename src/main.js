@@ -129,6 +129,7 @@ function onRaceEvent(s, ev) {
 
 function onFinish(s, ev) {
   sound.finish();
+  if (s.meta.kind !== 'test') rememberRun(s.meta.key, ev.time, s.race.ghost);
   const prev = s.pb;
   const improved = !prev || ev.time < prev.time;
   let note = '';
@@ -610,6 +611,20 @@ $('btn-save-random').onclick = () => {
 // while its best run replays here as a ghost, with the line it drove drawn on
 // the road. Its best run is kept per track so it can carry on later and be
 // raced against.
+// Your finished runs this session, per track, for the AI to learn from
+// (your best run is kept for good with your record).
+const myRuns = new Map();
+function rememberRun(key, time, ghost) {
+  const list = myRuns.get(key) || [];
+  list.unshift({ time, ghost: ghost.slice() });
+  myRuns.set(key, list.slice(0, 3));
+}
+function runsFor(meta, pb) {
+  const out = pb && pb.ghost ? [{ time: pb.time, ghost: pb.ghost }] : [];
+  for (const r of myRuns.get(meta.key) || []) if (out.length < 3 && !out.some((o) => o.time === r.time)) out.push(r);
+  return out;
+}
+
 function loadAI(meta) {
   return meta.kind === 'random' && !meta.saved ? meta.aiRun || null : store.load('ai.' + meta.key, null);
 }
@@ -634,7 +649,8 @@ function openAI(track, meta) {
   R.shadow.visible = false;
   R.ghost.visible = false;
   const saved = loadAI(meta);
-  const a = { track, meta, built, run: saved, report: null, t: 0, snap: true, paused: false, pb: loadPB(meta), flash: null, worker: null, local: null };
+  const pb = loadPB(meta);
+  const a = { track, meta, built, run: saved, report: null, t: 0, snap: true, paused: false, pb, runs: runsFor(meta, pb), flash: null, worker: null, local: null };
   app.ai = a;
   app.mode = 'ai';
   R.setAILine(saved && saved.ghost);
@@ -645,10 +661,10 @@ function openAI(track, meta) {
 }
 
 function startTrainer(a, policy) {
-  const msg = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, seed: (Math.random() * 2 ** 31) >>> 0 };
+  const msg = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, seed: (Math.random() * 2 ** 31) >>> 0, runs: a.runs.map((r) => r.ghost) };
   const onPage = () => {
     if (a.worker) { a.worker.terminate(); a.worker = null; }
-    a.local = new Trainer(parseTrack(msg.track), { policy: msg.policy, seed: msg.seed });
+    a.local = new Trainer(parseTrack(msg.track), { policy: msg.policy, seed: msg.seed, runs: msg.runs });
   };
   let worker = null;
   try {
@@ -685,7 +701,8 @@ function onAIReport(a, rep) {
     R.setAILine(rep.run.ghost);
     a.t = 0;
     a.snap = true;
-    a.flash = { text: prev ? `New best ${fmtTime(rep.run.time)} (${fmtTime(rep.run.time - prev.time, true)})` : `First run ${fmtTime(rep.run.time)}`, until: performance.now() + 2200, shown: false };
+    const yours = rep.lastSource === 'run' ? ', from your line' : '';
+    a.flash = { text: prev ? `New best ${fmtTime(rep.run.time)} (${fmtTime(rep.run.time - prev.time, true)}${yours})` : `First run ${fmtTime(rep.run.time)}`, until: performance.now() + 2200, shown: false };
   }
   renderAI(a);
 }
@@ -717,9 +734,13 @@ function renderAI(a) {
     svg += `<path d="${d}" fill="none" stroke="#a77bff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
   }
   $('ai-chart').innerHTML = svg;
+  const n = a.runs.length, from = rep ? rep.fromRuns : 0;
+  const learning = n
+    ? ` · learning from ${n === 1 ? 'your best run' : `${n} of your runs`}${from ? ` (${from} gain${from > 1 ? 's' : ''} from your driving)` : ''}`
+    : ' · finish a run here and it will learn from your driving too';
   $('ai-stats').textContent = rep && rep.failed
     ? 'The AI could not finish this track.'
-    : `${rep ? rep.attempts.toLocaleString() : 0} attempts · ${rep ? rep.improvements : 0} improvements${a.local ? ' · running on the page' : ''}`;
+    : `${rep ? rep.attempts.toLocaleString() : 0} attempts · ${rep ? rep.improvements : 0} improvements${learning}${a.local ? ' · running on the page' : ''}`;
   $('ai-race').disabled = !run;
 }
 
