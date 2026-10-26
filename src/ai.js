@@ -7,6 +7,12 @@
 // faster. The simulation is deterministic, so each attempt restarts from a
 // saved state just before the changed stretch, and stops early once it falls
 // behind or rejoins the best run's path.
+//
+// The score is the lap time. While an attempt is judged early, speed it
+// carries counts in its favour, and its changes lean toward pushing harder.
+// Walls cost only the time they cost: the line may run right up to them, and
+// after a crash the driver backs off and carries on. It never respawns; an
+// attempt is dropped only when the car can't get going again.
 
 import { vsub, vdot, vdist, clamp } from './math.js';
 import { GRAVITY, DOWNFORCE_PER_MASS, DOWNFORCE_CAP, SURFACE_MU } from './car.js';
@@ -22,8 +28,8 @@ const SNAP_EVERY = 40;        // ticks between saved states
 
 // limits on the sideways offset, per piece type. Kickers stay on the centre
 // line so the car takes off straight and lands on the road.
-const OFFSET_LIMIT = { LOOPR: 2.5, LOOPL: 2.5, WR: 5, WL: 5, BR2: 6, BL2: 6, BR3: 6, BL3: 6, K: 0, K2: 0 };
-const ROAD_LIMIT = ROAD_HALF - 1.7;
+const OFFSET_LIMIT = { LOOPR: 3.5, LOOPL: 3.5, WR: 6.5, WL: 6.5, BR2: 7.5, BL2: 7.5, BR3: 7.5, BL3: 7.5, K: 0, K2: 0 };
+const ROAD_LIMIT = ROAD_HALF - 1; // wheels brush the border
 
 // uniform cubic B-spline basis and its first two derivatives
 function basis(t) {
@@ -37,7 +43,7 @@ function basis(t) {
 
 export function initialPolicy(built) {
   const n = Math.ceil(built.line[built.line.length - 1].d / KNOT) + 4;
-  return { off: new Array(n).fill(0), fac: new Array(n).fill(1), margin: 0.66, gain: 1.2, preview: 0.12 };
+  return { off: new Array(n).fill(0), fac: new Array(n).fill(1), margin: 0.66, gain: 1.2, preview: 0.12, slide: 0.18, lift: 1.6 };
 }
 
 // A first racing line: treat the line as an elastic band and let it pull
@@ -122,7 +128,7 @@ export function compilePolicy(built, pol) {
     const a = mu * (GRAVITY + Math.min(DOWNFORCE_CAP, D * plan[i + 1] * plan[i + 1]));
     plan[i] = Math.min(plan[i], Math.sqrt(plan[i + 1] * plan[i + 1] + 2 * a * ds));
   }
-  return { pos, tan, curv, off, plan, gain: pol.gain, preview: pol.preview };
+  return { pos, tan, curv, off, plan, gain: pol.gain, preview: pol.preview, slide: pol.slide ?? 0.18, lift: pol.lift ?? 1.6 };
 }
 
 // Drives a compiled policy. Same controls a player has: steer, throttle, brake.
@@ -131,7 +137,14 @@ export class AIDriver {
     this.line = built.line;
     this.c = compiled;
     this.idx = 0;
-    this.stuck = 0;
+    this.stuck = 0;      // s resting still in the air (on its back or side)
+    this.blocked = 0;    // s barely moving while trying to go
+    this.recover = 0;    // s left backing away from a crash
+    this.recoverSteer = 0;
+    this.grace = 0;      // s to pull away after backing off before checking again
+    this.offTime = 0;    // s far from the track (fallen to the floor below)
+    this.still = 0;      // s without getting further along the line
+    this.far = 0;
   }
 
   locate(p) {
@@ -160,12 +173,16 @@ export class AIDriver {
     const { f, u, r } = car.basis();
     const vx = vdot(car.v, f);
 
+    // progress along the line (wrapping round at a new lap)
+    if (i > this.far || this.far - i > n / 2) { this.far = i; this.still = 0; } else this.still += dt;
+
     if (!car.grounded && car.airTime > 0.05) {
+      // a car resting on its back or side reads as airborne: that one is done
       this.stuck = sp < 1 ? this.stuck + dt : 0;
       const hit = car.world.raycast(car.p, [0, -1, 0], 150, {});
       const nrm = hit && hit.n[1] > 0.3 ? hit.n : [0, 1, 0];
       const cmd = vdot(f, nrm) * 4 + vdot(car.w, r) * 0.8;
-      return { steer: 0, throttle: cmd < -0.05 ? clamp(-cmd * 3, 0, 1) : 0, brake: cmd > 0.05 ? clamp(cmd * 3, 0, 1) : 0, analog: true, assists: true, wantRespawn: this.stuck > 2 };
+      return { steer: 0, throttle: cmd < -0.05 ? clamp(-cmd * 3, 0, 1) : 0, brake: cmd > 0.05 ? clamp(cmd * 3, 0, 1) : 0, analog: true, assists: true, giveUp: this.stuck > 3 || this.still > 8 };
     }
 
     // where along the line the car is, between two line points
@@ -186,19 +203,38 @@ export class AIDriver {
     const steer = clamp(angle / car.steerLimit(vx), -1, 1);
     const z = vdot(vsub(L[Math.min(n - 1, i + 3)].pos, car.p), f);
 
+    // no way back: fallen off raised road onto the floor, or going nowhere
+    const off = vdist(L[i].pos, car.p) > 12 && !L[i].gap;
+    this.offTime = off ? this.offTime + dt : 0;
+    const giveUp = this.offTime > 3 || this.still > 8;
+
+    // after a crash: back away from the wall, swinging the nose toward the
+    // line (steering works the other way in reverse), then carry on
+    if (this.recover > 0) {
+      this.recover -= dt;
+      if (this.recover <= 0) this.grace = 1.5;
+      return { steer: this.recoverSteer, throttle: 0, brake: 1, analog: true, assists: true, giveUp };
+    }
+    this.grace = Math.max(0, this.grace - dt);
+
     let vt = C.plan[a] + (C.plan[a + 1] - C.plan[a]) * lam;
     for (let m = a + 1; m < Math.min(n, i + 6); m++) vt = Math.min(vt, C.plan[m]);
-    let throttle = clamp((vt - sp) * 0.4 + 0.3, 0, 1) * clamp(1.6 - Math.abs(steer), 0.3, 1);
+    let throttle = clamp((vt - sp) * 0.4 + 0.3, 0, 1) * clamp(C.lift - Math.abs(steer), 0.3, 1);
     let brake = sp > vt + 3 ? clamp((sp - vt - 3) * 0.5, 0.3, 1) * (1 - 0.6 * Math.abs(steer)) : 0;
     const beta = Math.atan2(vdot(car.v, r), Math.abs(vx) + 0.1);
-    if (Math.abs(beta) > 0.18 && sp > 5) throttle = 0;
+    if (Math.abs(beta) > C.slide && sp > 5) throttle = 0;
     if (sp > vt + 0.5) throttle = 0;
     if (Math.abs(steer) > 0.95 && sp > 8) { throttle = 0; brake = Math.max(brake, 0.25); }
     if (z < 0 && sp < 5) throttle = 1;
 
-    const off = vdist(L[i].pos, car.p) > 12 && !L[i].gap;
-    this.stuck = sp < 1 || off ? this.stuck + dt : 0;
-    return { steer, throttle, brake, analog: true, assists: true, wantRespawn: this.stuck > 1 };
+    // stuck: in a forward gear, on the throttle, and not moving (nose in a wall)
+    this.blocked = car.grounded && sp < 1.5 && throttle > 0.2 && car.gear >= 1 && this.grace <= 0 ? this.blocked + dt : 0;
+    if (this.blocked > 0.6) {
+      this.blocked = 0;
+      this.recover = 1.1;
+      this.recoverSteer = -Math.sign(angle || 1);
+    }
+    return { steer, throttle, brake, analog: true, assists: true, giveUp };
   }
 }
 
@@ -236,7 +272,7 @@ export class Trainer {
     // warm-up: a tight line at a few levels of overall push, before the
     // small changes start
     const tight = smoothPolicy(this.built, base);
-    this.warmup = resume ? [] : [0.74, 0.8, 0.86, 0.92, 0.98].map((m) => ({ ...tight, margin: m })).concat([0.74, 0.82].map((m) => ({ ...base, margin: m })));
+    this.warmup = resume ? [] : [0.74, 0.82, 0.9, 0.98, 1.06].map((m) => ({ ...tight, margin: m })).concat([0.78, 0.88].map((m) => ({ ...base, margin: m })));
   }
 
   // What the page shows; the run itself (ghost, splits, policy) only when asked
@@ -288,11 +324,11 @@ export class Trainer {
         snaps.push({ tick: race.ticks, k, idx: driver.idx, stuck: driver.stuck, car: pickClone(car, CAR_SKIP), race: pickClone(race, RACE_SKIP), ghostLen: race.ghost.length });
       }
       const inp = driver.input(car, DT);
-      if (inp.wantRespawn) return null;
+      if (inp.giveUp) return null;
       prev[0] = car.p[0]; prev[1] = car.p[1]; prev[2] = car.p[2];
       tPrev = race.time;
       race.tick(inp);
-      if (race.respawns || race.ticks > maxTicks) return null;
+      if (race.respawns || race.ticks > maxTicks) return null; // fell off the stadium
       // crossings of the planes through each line point
       while (k < N) {
         const pt = L[k % n], P = pt.pos, tk = pt.t;
@@ -308,7 +344,11 @@ export class Trainer {
           const dv = cross.spd[k] - cmp.cross.spd[k];
           const past = dAt(k) - L[cmp.lastDiff].d;
           // behind and no faster: it won't make that back
-          if (dt > 0.25 || (past > 40 && dt > 0.002 && dv < 0.3)) return { slower: true };
+          // carrying more speed counts in its favour (about the time it saves
+          // over the next 60 m); being slower is judged on time alone
+          const v = Math.max(20, cmp.cross.spd[k]);
+          const score = dt - (clamp(dv, 0, 5) * 60) / (v * v);
+          if (score > 0.25 || (past > 40 && score > 0.002)) return { slower: true };
           // back on the best run's line at about its speed: the time gap now
           // is the gap at the finish. If it's ahead, drive it out to be sure.
           if (past > 25 && Math.abs(cross.lat[k] - cmp.cross.lat[k]) < 0.15 && Math.abs(dv) < 0.15) {
@@ -330,17 +370,20 @@ export class Trainer {
     const nk = p.off.length;
     const roll = r();
     if (roll < 0.03) {
-      p.margin = clamp(p.margin * Math.exp(gauss() * 0.02), 0.5, 1.05);
+      p.margin = clamp(p.margin * Math.exp((gauss() + 0.4) * 0.02), 0.5, 1.3);
     } else if (roll < 0.05) {
       p.gain = clamp(p.gain * Math.exp(gauss() * 0.1), 0.4, 4);
       p.preview = clamp(p.preview * Math.exp(gauss() * 0.1), 0.04, 0.3);
+      // how much slide and steering it tolerates before lifting
+      p.slide = clamp((p.slide ?? 0.18) * Math.exp((gauss() + 0.3) * 0.1), 0.1, 0.6);
+      p.lift = clamp((p.lift ?? 1.6) * Math.exp((gauss() + 0.3) * 0.05), 1, 3);
     } else {
       const c = Math.floor(r() * nk), w = 1 + Math.floor(r() * 3);
       const amp = gauss();
       for (let k = Math.max(0, c - w); k <= Math.min(nk - 1, c + w); k++) {
         const fall = 1 - Math.abs(k - c) / (w + 1);
         if (roll < 0.62) p.off[k] = clamp(p.off[k] + amp * this.sigmaOff * fall, -ROAD_LIMIT, ROAD_LIMIT);
-        else p.fac[k] = clamp(p.fac[k] * Math.exp(amp * this.sigmaFac * fall), 0.6, 1.8);
+        else p.fac[k] = clamp(p.fac[k] * Math.exp((amp + 0.2) * this.sigmaFac * fall), 0.6, 2.2); // leans toward more push
       }
     }
     return p;
@@ -366,7 +409,7 @@ export class Trainer {
     const n = this.line.length, B = best.compiled;
     let first = -1, last = -1;
     for (let i = 0; i < n; i++) {
-      if (Math.abs(compiled.off[i] - B.off[i]) > 1e-9 || Math.abs(compiled.plan[i] - B.plan[i]) > 1e-9 || compiled.gain !== B.gain || compiled.preview !== B.preview) {
+      if (Math.abs(compiled.off[i] - B.off[i]) > 1e-9 || Math.abs(compiled.plan[i] - B.plan[i]) > 1e-9 || compiled.gain !== B.gain || compiled.preview !== B.preview || compiled.slide !== B.slide || compiled.lift !== B.lift) {
         if (first < 0) first = i;
         last = i;
       }
