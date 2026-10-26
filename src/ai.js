@@ -479,11 +479,11 @@ export class Trainer {
             if (dt > 0.25 || (dAt(k) > 100 && dt > 0.03)) return { slower: true, why: 'behind' };
           } else {
             // behind and no faster: it won't make that back. Carrying more
-            // speed counts in its favour (about the time it saves over the
-            // next 60 m), until it is well past the change, when only the
-            // time counts.
+            // speed counts strongly in its favour (about the time it would
+            // save over the next 120 m), until it is well past the change,
+            // when only the time counts.
             const v = Math.max(20, cmp.cross.spd[k]);
-            const score = dt - (past < 150 ? (clamp(dv, 0, 5) * 60) / (v * v) : 0);
+            const score = dt - (past < 150 ? (clamp(dv, 0, 5) * 120) / (v * v) : 0);
             if (score > 0.25 || (past > 40 && score > 0.002 && (dv < 0.3 || past > 150))) return { slower: true, why: 'behind' };
             // back on the best run's line at about its speed: the time gap now
             // is the gap at the finish. If it's ahead, drive it out to be sure.
@@ -572,7 +572,7 @@ export class Trainer {
       for (let k = Math.max(0, c - w); k <= Math.min(nk - 1, c + w); k++) {
         const fall = 1 - Math.abs(k - c) / (w + 1);
         if (roll < 0.62) p.off[k] = clamp(p.off[k] + amp * this.sigmaOff * fall, -ROAD_LIMIT, ROAD_LIMIT);
-        else p.fac[k] = clamp(p.fac[k] * Math.exp((amp + 0.2) * this.sigmaFac * fall), 0.6, 2.2); // leans toward more push
+        else p.fac[k] = clamp(p.fac[k] * Math.exp((amp + 0.4) * this.sigmaFac * fall), 0.6, 2.2); // leans well toward more push
       }
     }
     return [p, 'self'];
