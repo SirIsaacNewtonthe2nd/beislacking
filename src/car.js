@@ -539,9 +539,12 @@ export class Car {
     this.wallHit = Math.max(0, this.wallHit - dt);
     this.scrape = Math.max(0, this.scrape - dt * 4);
     for (let iter = 0; iter < 2; iter++) {
+      // a second pass only matters if the first one touched something
+      let touched = false;
       for (const s of BODY) {
         const c = vadd(this.p, qrot(this.q, s.p));
         const contacts = this.world.sphere(c, s.r, this.contacts);
+        if (contacts.length) touched = true;
         for (const ct of contacts) {
           const n = ct.n;
           vaddScaledi(this.p, n, ct.depth * 0.6);
@@ -567,6 +570,7 @@ export class Car {
           this.hitAt = at;
         }
       }
+      if (!touched) break;
     }
   }
 }

@@ -650,7 +650,10 @@ function openAI(track, meta) {
   R.ghost.visible = false;
   const saved = loadAI(meta);
   const pb = loadPB(meta);
-  const a = { track, meta, built, run: saved, report: null, t: 0, snap: true, paused: false, pb, runs: runsFor(meta, pb), flash: null, worker: null, local: null };
+  const a = {
+    track, meta, built, run: saved, report: null, reports: [], t: 0, snap: true, paused: false, pb, runs: runsFor(meta, pb), flash: null,
+    workers: [], local: null, improvements: 0, fromRuns: 0, history: saved ? [[0, saved.time]] : [],
+  };
   app.ai = a;
   app.mode = 'ai';
   R.setAILine(saved && saved.ghost);
@@ -660,40 +663,51 @@ function openAI(track, meta) {
   renderAI(a);
 }
 
+// One trainer per spare CPU core, each searching from a different random
+// start; whenever one finds a new best the others carry on from it.
 function startTrainer(a, policy) {
-  const msg = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, seed: (Math.random() * 2 ** 31) >>> 0, runs: a.runs.map((r) => r.ghost) };
+  const parts = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
+  const base = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, runs: a.runs.map((r) => r.ghost) };
+  const seed = () => (Math.random() * 2 ** 31) >>> 0;
+  let fellBack = false;
   const onPage = () => {
-    if (a.worker) { a.worker.terminate(); a.worker = null; }
-    a.local = new Trainer(parseTrack(msg.track), { policy: msg.policy, seed: msg.seed, runs: msg.runs });
+    if (fellBack || app.ai !== a) return;
+    fellBack = true;
+    stopTrainer(a);
+    a.reports = [];
+    a.local = new Trainer(parseTrack(base.track), { policy: base.policy, seed: seed(), runs: base.runs });
   };
-  let worker = null;
-  try {
-    worker = typeof AI_WORKER_SRC === 'string'
-      ? new Worker(URL.createObjectURL(new Blob([AI_WORKER_SRC], { type: 'text/javascript' })))
-      : new Worker('src/ai-worker.js', { type: 'module' });
-  } catch { worker = null; }
-  if (!worker) { onPage(); return; }
-  a.worker = worker;
-  let heard = false;
-  worker.onmessage = (e) => {
-    heard = true;
-    if (e.data.type === 'report') onAIReport(a, e.data.report);
-  };
-  worker.onerror = (e) => {
-    e.preventDefault();
-    if (!heard && app.ai === a) onPage();
-  };
-  worker.postMessage(msg);
+  for (let i = 0; i < parts; i++) {
+    let worker = null;
+    try {
+      worker = typeof AI_WORKER_SRC === 'string'
+        ? new Worker(URL.createObjectURL(new Blob([AI_WORKER_SRC], { type: 'text/javascript' })))
+        : new Worker('src/ai-worker.js', { type: 'module' });
+    } catch { worker = null; }
+    if (!worker) { onPage(); return; }
+    let heard = false;
+    worker.onmessage = (e) => {
+      heard = true;
+      if (e.data.type === 'report') onAIReport(a, e.data.report, i);
+    };
+    worker.onerror = (e) => {
+      e.preventDefault();
+      if (!heard) onPage();
+    };
+    worker.postMessage({ ...base, seed: seed(), part: i, parts });
+    a.workers.push(worker);
+  }
 }
 
 function stopTrainer(a) {
-  if (a.worker) { a.worker.terminate(); a.worker = null; }
+  for (const w of a.workers) w.terminate();
+  a.workers = [];
   a.local = null;
 }
 
-function onAIReport(a, rep) {
+function onAIReport(a, rep, i = 0) {
   if (app.ai !== a) return;
-  a.report = rep;
+  a.reports[i] = rep;
   if (rep.run && (!a.run || rep.run.time < a.run.time)) {
     const prev = a.run;
     a.run = rep.run;
@@ -701,9 +715,21 @@ function onAIReport(a, rep) {
     R.setAILine(rep.run.ghost);
     a.t = 0;
     a.snap = true;
+    a.improvements++;
+    if (rep.lastSource === 'run') a.fromRuns++;
     const yours = rep.lastSource === 'run' ? ', from your line' : '';
     a.flash = { text: prev ? `New best ${fmtTime(rep.run.time)} (${fmtTime(rep.run.time - prev.time, true)}${yours})` : `First run ${fmtTime(rep.run.time)}`, until: performance.now() + 2200, shown: false };
+    // the other trainers carry on from here
+    a.workers.forEach((w, j) => { if (j !== i) w.postMessage({ cmd: 'adopt', policy: rep.run.pol, time: rep.run.time }); });
   }
+  const reps = a.reports.filter(Boolean);
+  const attempts = reps.reduce((n, r) => n + r.attempts, 0);
+  if (rep.run && a.run === rep.run) a.history.push([attempts, rep.run.time]);
+  a.report = {
+    ready: reps.some((r) => r.ready),
+    failed: reps.length > 0 && reps.every((r) => r.failed),
+    attempts, improvements: a.improvements, fromRuns: a.fromRuns, history: a.history.slice(-400),
+  };
   renderAI(a);
 }
 
@@ -740,7 +766,7 @@ function renderAI(a) {
     : ' · finish a run here and it will learn from your driving too';
   $('ai-stats').textContent = rep && rep.failed
     ? 'The AI could not finish this track.'
-    : `${rep ? rep.attempts.toLocaleString() : 0} attempts · ${rep ? rep.improvements : 0} improvements${learning}${a.local ? ' · running on the page' : ''}`;
+    : `${rep ? rep.attempts.toLocaleString() : 0} attempts · ${rep ? rep.improvements : 0} improvements${learning}${a.local ? ' · running on the page' : a.workers.length > 1 ? ` · ${a.workers.length} trainers in parallel` : ''}`;
   $('ai-race').disabled = !run;
 }
 
@@ -800,7 +826,7 @@ $('ai-toggle').onclick = () => {
   const a = app.ai;
   if (!a) return;
   a.paused = !a.paused;
-  if (a.worker) a.worker.postMessage({ cmd: a.paused ? 'pause' : 'resume' });
+  for (const w of a.workers) w.postMessage({ cmd: a.paused ? 'pause' : 'resume' });
   $('ai-toggle').textContent = a.paused ? 'Resume' : 'Pause';
   renderAI(a);
 };

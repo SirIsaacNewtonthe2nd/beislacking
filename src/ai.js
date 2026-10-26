@@ -347,6 +347,9 @@ export class Trainer {
     this.history = [];
     this.start = opts.policy || null;
     this.best = null; // the first attempt drives the starting policy
+    // when several trainers work together, each takes a share of the warm-up
+    this.part = opts.part || 0;
+    this.parts = opts.parts || 1;
     // your runs, read once the track is built
     this.runs = (opts.runs || []).map((g) => readRun(this.built, g)).filter(Boolean);
     this.runCache = new Map();
@@ -379,6 +382,17 @@ export class Trainer {
       this.warmup.push({ pol, source: 'run', practice: 3, run, at, pace });
       for (const m of resume ? [cur.margin] : [0.86, 0.98]) this.warmup.push({ pol: { ...cur, margin: m, off: this.runAt(i, m).off }, source: 'run' });
     });
+    this.warmup = this.warmup.filter((_, i) => i % this.parts === this.part);
+  }
+
+  // Carry on from a better policy another trainer found. Returns true if taken.
+  adopt(pol, time) {
+    if (!this.best) this.init();
+    if (this.best.time && this.best.time <= time) return false;
+    const res = this.fullRun(pol);
+    if (!res.time || (this.best.time && res.time >= this.best.time)) return false;
+    this.best = res;
+    return true;
   }
 
   // What the page shows; the run itself (ghost, splits, policy) only when asked
@@ -424,7 +438,7 @@ export class Trainer {
       race.car.frozen = false;
       race.recordGhost();
     }
-    let prev = [...car.p], tPrev = race.time;
+    let prev = [...car.p], tPrev = race.time, verifying = false;
     const maxTicks = Math.round(300 / DT);
     while (race.phase === 'running') {
       if (race.ticks % SNAP_EVERY === 0 && (!snaps.length || snaps[snaps.length - 1].tick < race.ticks)) {
@@ -450,17 +464,28 @@ export class Trainer {
           const dt = cross.t[k] - cmp.cross.t[k];
           const dv = cross.spd[k] - cmp.cross.spd[k];
           const past = dAt(k) - L[cmp.lastDiff].d;
-          // behind and no faster: it won't make that back
-          // carrying more speed counts in its favour (about the time it saves
-          // over the next 60 m); being slower is judged on time alone
-          const v = Math.max(20, cmp.cross.spd[k]);
-          const score = dt - (clamp(dv, 0, 5) * 60) / (v * v);
-          if (score > 0.25 || (past > 40 && score > 0.002 && dv < 0.3)) return { slower: true };
-          // back on the best run's line at about its speed: the time gap now
-          // is the gap at the finish. If it's ahead, drive it out to be sure.
-          if (past > 25 && Math.abs(cross.lat[k] - cmp.cross.lat[k]) < 0.15 && Math.abs(dv) < 0.15) {
-            if (dt > -0.001) return { slower: true };
-            cmp = null;
+          if (verifying) {
+            // ahead and back on the best run's line: drive it out, but stop
+            // as soon as the lead is gone
+            if (dt > 0.0005) return { slower: true, why: 'lost lead' };
+          } else if (cmp.global) {
+            // a change to the whole lap (overall push, steering) can't rejoin;
+            // drop it once it is clearly losing
+            if (dt > 0.25 || (dAt(k) > 100 && dt > 0.03)) return { slower: true, why: 'behind' };
+          } else {
+            // behind and no faster: it won't make that back. Carrying more
+            // speed counts in its favour (about the time it saves over the
+            // next 60 m), until it is well past the change, when only the
+            // time counts.
+            const v = Math.max(20, cmp.cross.spd[k]);
+            const score = dt - (past < 150 ? (clamp(dv, 0, 5) * 60) / (v * v) : 0);
+            if (score > 0.25 || (past > 40 && score > 0.002 && (dv < 0.3 || past > 150))) return { slower: true, why: 'behind' };
+            // back on the best run's line at about its speed: the time gap now
+            // is the gap at the finish. If it's ahead, drive it out to be sure.
+            if (past > 25 && Math.abs(cross.lat[k] - cmp.cross.lat[k]) < 0.15 && Math.abs(dv) < 0.15) {
+              if (dt > -0.001) return { slower: true, why: 'rejoined' };
+              verifying = true;
+            }
           }
         }
         k++;
@@ -560,7 +585,8 @@ export class Trainer {
     const dStart = this.line[first].d - 45;
     let snap = null;
     for (const s of best.snaps) if (this.line[Math.min(n - 1, s.idx)].d < dStart && s.k <= first) snap = s;
-    const res = this.drive(pol, compiled, snap, { ...best, lastDiff: last });
+    const global = this.line[last].d - this.line[first].d > this.line[n - 1].d * 0.5;
+    const res = this.drive(pol, compiled, snap, { ...best, lastDiff: last, global });
     if (!res || res.slower || !res.time || res.time >= best.time) {
       this.sigmaOff = Math.max(0.3, this.sigmaOff * 0.998);
       this.sigmaFac = Math.max(0.01, this.sigmaFac * 0.998);
