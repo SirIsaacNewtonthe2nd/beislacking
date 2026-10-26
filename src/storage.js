@@ -25,6 +25,27 @@ export function trackKey(track) {
   return 'u' + (h >>> 0).toString(36);
 }
 
+// Clears every best time and saved AI run; tracks and settings stay.
+export function clearRecords() {
+  try {
+    const gone = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.startsWith(NS + 'pb.') || k.startsWith(NS + 'ai.'))) gone.push(k);
+    }
+    for (const k of gone) localStorage.removeItem(k);
+    return gone.length;
+  } catch { return 0; }
+}
+
+// Records saved before this version are cleared once, on the first visit
+const RECORDS_VERSION = 2;
+export function resetOldRecords() {
+  if (load('recordsVersion', 1) >= RECORDS_VERSION) return;
+  clearRecords();
+  save('recordsVersion', RECORDS_VERSION);
+}
+
 export const getPB = (key) => load('pb.' + key, null);
 export const setPB = (key, rec) => save('pb.' + key, rec);
 export const getSettings = () => ({ ghost: true, sound: true, camera: 0, assists: true, ...load('settings', {}) });

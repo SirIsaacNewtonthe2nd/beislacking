@@ -22,6 +22,7 @@ const $ = (id) => document.getElementById(id);
 const R = new Renderer($('view'));
 const input = new Input();
 const sound = new Sound();
+store.resetOldRecords();
 const settings = store.getSettings();
 R.camMode = settings.camera || 0;
 sound.setMuted(!settings.sound);
@@ -514,6 +515,21 @@ $('set-ghost').checked = settings.ghost;
 $('set-sound').checked = settings.sound;
 $('set-assists').checked = settings.assists;
 $('set-assists').onchange = (e) => { settings.assists = e.target.checked; store.setSettings(settings); };
+$('btn-reset-records').onclick = (e) => {
+  const b = e.currentTarget;
+  if (!b.dataset.armed) {
+    b.dataset.armed = '1';
+    b.textContent = 'Confirm: clear them all';
+    setTimeout(() => { if (b.isConnected) { delete b.dataset.armed; b.textContent = 'Reset best times and AI runs'; } }, 3000);
+    return;
+  }
+  delete b.dataset.armed;
+  store.clearRecords();
+  myRuns.clear();
+  b.textContent = 'Cleared';
+  renderMenu();
+  setTimeout(() => { if (b.isConnected) b.textContent = 'Reset best times and AI runs'; }, 2000);
+};
 $('set-ghost').onchange = (e) => { settings.ghost = e.target.checked; store.setSettings(settings); };
 $('set-sound').onchange = (e) => { settings.sound = e.target.checked; store.setSettings(settings); sound.setMuted(!settings.sound); if (settings.sound) sound.start(); };
 $('btn-resume').onclick = () => togglePause(false);
