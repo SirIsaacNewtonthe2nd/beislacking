@@ -385,13 +385,18 @@ export class Trainer {
     this.warmup = this.warmup.filter((_, i) => i % this.parts === this.part);
   }
 
-  // Carry on from a better policy another trainer found. Returns true if taken.
-  adopt(pol, time) {
+  // The best run as another trainer needs it to carry on from it: its saved
+  // states come along, so taking it over costs no driving.
+  record() {
+    const b = this.best;
+    return { time: b.time, cps: b.cps, ghost: b.ghost, cross: b.cross, snaps: b.snaps, pol: b.pol };
+  }
+
+  // Carry on from a better run another trainer found. Returns true if taken.
+  adopt(rec) {
     if (!this.best) this.init();
-    if (this.best.time && this.best.time <= time) return false;
-    const res = this.fullRun(pol);
-    if (!res.time || (this.best.time && res.time >= this.best.time)) return false;
-    this.best = res;
+    if (!rec || !rec.time || (this.best.time && this.best.time <= rec.time)) return false;
+    this.best = { ...rec, compiled: compilePolicy(this.built, rec.pol) };
     return true;
   }
 
@@ -511,6 +516,28 @@ export class Trainer {
     return { ...item, pol: { ...item.pol, fac }, practice: item.practice - 1, lastTime: res.time || item.lastTime };
   }
 
+  // A control point to change, picked in proportion to the time the best run
+  // spends around it: the slow parts of the lap, where time is lost, get the
+  // most attention
+  pickKnot(x) {
+    const best = this.best, nk = best.pol.off.length;
+    if (this.weightsFor !== best) {
+      const L = this.line, n = L.length, w = new Float64Array(nk), t = best.cross.t;
+      for (let k = 0; k + 1 < t.length; k++) {
+        const dt = t[k + 1] - t[k];
+        if (dt > 0 && dt < 5) w[Math.min(nk - 1, Math.round(L[k % n].d / KNOT) + 1)] += dt;
+      }
+      for (let k = 1; k < nk; k++) w[k] += w[k - 1];
+      this.weights = w;
+      this.weightsFor = best;
+    }
+    const w = this.weights, total = w[nk - 1];
+    if (!(total > 0)) return Math.floor(x * nk);
+    let lo = 0, hi = nk - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (w[m] < x * total) lo = m + 1; else hi = m; }
+    return lo;
+  }
+
   // A changed copy of a policy, and where the change came from
   mutate(pol) {
     const r = this.rand;
@@ -540,7 +567,7 @@ export class Trainer {
       p.slide = clamp((p.slide ?? 0.18) * Math.exp((gauss() + 0.3) * 0.1), 0.1, 0.6);
       p.lift = clamp((p.lift ?? 1.6) * Math.exp((gauss() + 0.3) * 0.05), 1, 3);
     } else {
-      const c = Math.floor(r() * nk), w = 1 + Math.floor(r() * 3);
+      const c = this.pickKnot(r()), w = 1 + Math.floor(r() * 3);
       const amp = gauss();
       for (let k = Math.max(0, c - w); k <= Math.min(nk - 1, c + w); k++) {
         const fall = 1 - Math.abs(k - c) / (w + 1);

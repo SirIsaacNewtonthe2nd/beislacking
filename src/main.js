@@ -664,7 +664,8 @@ function openAI(track, meta) {
 }
 
 // One trainer per spare CPU core, each searching from a different random
-// start; whenever one finds a new best the others carry on from it.
+// start; whenever one finds a new best it sends it to the others, which
+// carry on from it.
 function startTrainer(a, policy) {
   const parts = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 2) - 1));
   const base = { cmd: 'start', track: serializeTrack(a.track), policy: policy || null, runs: a.runs.map((r) => r.ghost) };
@@ -697,6 +698,14 @@ function startTrainer(a, policy) {
     worker.postMessage({ ...base, seed: seed(), part: i, parts });
     a.workers.push(worker);
   }
+  // connect every pair of trainers so new bests go straight between them
+  for (let i = 0; i < parts; i++) {
+    for (let j = i + 1; j < parts; j++) {
+      const ch = new MessageChannel();
+      a.workers[i].postMessage({ cmd: 'peer' }, [ch.port1]);
+      a.workers[j].postMessage({ cmd: 'peer' }, [ch.port2]);
+    }
+  }
 }
 
 function stopTrainer(a) {
@@ -719,8 +728,6 @@ function onAIReport(a, rep, i = 0) {
     if (rep.lastSource === 'run') a.fromRuns++;
     const yours = rep.lastSource === 'run' ? ', from your line' : '';
     a.flash = { text: prev ? `New best ${fmtTime(rep.run.time)} (${fmtTime(rep.run.time - prev.time, true)}${yours})` : `First run ${fmtTime(rep.run.time)}`, until: performance.now() + 2200, shown: false };
-    // the other trainers carry on from here
-    a.workers.forEach((w, j) => { if (j !== i) w.postMessage({ cmd: 'adopt', policy: rep.run.pol, time: rep.run.time }); });
   }
   const reps = a.reports.filter(Boolean);
   const attempts = reps.reduce((n, r) => n + r.attempts, 0);
